@@ -1,4 +1,4 @@
-﻿package com.oceanembed.backend.dto;
+package com.oceanembed.backend.dto;
 
 /**
  * Optional frontend metadata only. These values are never treated as the

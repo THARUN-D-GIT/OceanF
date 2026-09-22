@@ -1,4 +1,4 @@
-﻿package com.oceanembed.backend.entity;
+package com.oceanembed.backend.entity;
 
 import jakarta.persistence.*;
 import java.time.Instant;

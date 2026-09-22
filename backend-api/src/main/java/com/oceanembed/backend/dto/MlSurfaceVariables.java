@@ -1,4 +1,4 @@
-﻿package com.oceanembed.backend.dto;
+package com.oceanembed.backend.dto;
 
 /**
  * Optional metadata representation of the seven trained OceanEmbed inputs.

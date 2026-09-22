@@ -4,7 +4,11 @@ from fastapi import FastAPI, HTTPException
 
 from app.config import settings
 from app.model import model
-from app.schemas import HealthResponse, PredictionRequest, PredictionResponse
+from app.schemas import (
+    HealthResponse,
+    PredictionRequest,
+    PredictionResponse,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("oceanembed.api")
@@ -35,7 +39,11 @@ def model_info() -> dict:
     return model.get_model_info()
 
 
-@app.post("/predict", response_model=PredictionResponse, tags=["inference"])
+@app.post(
+    "/predict",
+    response_model=PredictionResponse,
+    tags=["inference"],
+)
 def predict(request: PredictionRequest) -> PredictionResponse:
     if not model.loaded:
         raise HTTPException(
@@ -44,22 +52,27 @@ def predict(request: PredictionRequest) -> PredictionResponse:
         )
 
     try:
-        predictions = model.predict(request)
+        # model.predict() already returns the complete
+        # PredictionResponse object.
+        return model.predict(request)
+
     except (FileNotFoundError, ValueError) as exc:
-        logger.warning("Invalid/unavailable OceanEmbed request: %s", exc)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        logger.warning(
+            "Invalid/unavailable OceanEmbed request: %s",
+            exc,
+        )
+
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
+
     except Exception as exc:
-        logger.exception("OceanEmbed inference failed")
+        logger.exception(
+            "OceanEmbed inference failed"
+        )
+
         raise HTTPException(
             status_code=500,
             detail=f"OceanEmbed inference error: {exc}",
         ) from exc
-
-    return PredictionResponse(
-        latitude=request.latitude,
-        longitude=request.longitude,
-        date=request.date,
-        model_version=request.model_version or model.model_version,
-        grid_resolution_deg=settings.grid_resolution_deg,
-        predictions=predictions,
-    )

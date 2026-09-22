@@ -1,4 +1,4 @@
-﻿package com.oceanembed.backend.service;
+package com.oceanembed.backend.service;
 
 import com.oceanembed.backend.dto.*;
 import com.oceanembed.backend.entity.PredictionJob;

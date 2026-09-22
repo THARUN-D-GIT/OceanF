@@ -1,4 +1,4 @@
-﻿package com.oceanembed.backend.dto;
+package com.oceanembed.backend.dto;
 
 import java.time.LocalDate;
 import java.util.List;
