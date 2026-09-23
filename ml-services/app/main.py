@@ -67,6 +67,40 @@ def predict(request: PredictionRequest) -> PredictionResponse:
             detail=str(exc),
         ) from exc
 
+    except RuntimeError as exc:
+        message = str(exc)
+
+        # A complete 64x64 input tile is required to produce
+        # the centered 32x32 prediction region. Coordinates
+        # without sufficient spatial context are therefore
+        # valid geographic coordinates but unsupported for
+        # OceanEmbed inference.
+        if (
+            "Requested grid point could not be represented"
+            " inside the 32x32 prediction region"
+            in message
+        ):
+            logger.warning(
+                "Unsupported OceanEmbed inference location: %s",
+                message,
+            )
+
+            raise HTTPException(
+                status_code=422,
+                detail=message,
+            ) from exc
+
+        # Other RuntimeErrors are genuine inference/service
+        # failures and must remain HTTP 500.
+        logger.exception(
+            "OceanEmbed inference failed with RuntimeError"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"OceanEmbed inference error: {message}",
+        ) from exc
+
     except Exception as exc:
         logger.exception(
             "OceanEmbed inference failed"

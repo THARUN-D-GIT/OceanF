@@ -21,29 +21,41 @@ data/processed/**/*.h5
 data/processed/**/*.hdf5
 data/processed/**/*.zarr
 
+# ML training artifacts
+data/processed/ML/checkpoints/
+data/processed/ML/baselines/
+data/processed/ML/evaluation/
+
 # Python
 __pycache__/
 *.py[cod]
 *.pyo
+*.pyd
+
+# Python environments
+.venv/
+venv/
+.venv312/
+env/
+
+# Python packaging
+*.egg-info/
+dist/
+build/
 
 # Jupyter
 .ipynb_checkpoints/
 
-# Virtual environments
-.venv/
-venv/
-.venv312/
-*.nc
-*.nc4
-*.h5
-*.hdf5
-*.grib
-*.grib2
-*.zarr
-data/raw/
-.ipynb_checkpoints/
-__pycache__/
-env/
+# Java / Maven
+**/target/
+*.class
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
 
 # OS files
 .DS_Store
@@ -52,18 +64,3 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
-
-# Temporary files
-*.tmp
-*.temp
-*.log
-
-# Python packaging
-*.egg-info/
-dist/
-build/
-# ML training artifacts
-data/processed/ML/checkpoints/
-# ML baseline and evaluation outputs
-data/processed/ML/baselines/
-data/processed/ML/evaluation/
