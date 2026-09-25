@@ -11,12 +11,15 @@ public class PredictionResponseDTO {
     private Double latitude;
     private Double longitude;
     private LocalDate date;
+    private LocalDate inputWindowStart;
+    private LocalDate inputWindowEnd;
     private String modelVersion;
     private Double gridResolutionDeg;
     private Instant createdAt;
     private Instant completedAt;
     private String errorMessage;
     private List<DepthPredictionDTO> predictions;
+    private List<SurfaceObservationDTO> surfaceObservations;
 
     public Long getJobId() {
         return jobId;
@@ -56,6 +59,22 @@ public class PredictionResponseDTO {
 
     public void setDate(LocalDate date) {
         this.date = date;
+    }
+
+    public LocalDate getInputWindowStart() {
+        return inputWindowStart;
+    }
+
+    public void setInputWindowStart(LocalDate inputWindowStart) {
+        this.inputWindowStart = inputWindowStart;
+    }
+
+    public LocalDate getInputWindowEnd() {
+        return inputWindowEnd;
+    }
+
+    public void setInputWindowEnd(LocalDate inputWindowEnd) {
+        this.inputWindowEnd = inputWindowEnd;
     }
 
     public String getModelVersion() {
@@ -104,5 +123,13 @@ public class PredictionResponseDTO {
 
     public void setPredictions(List<DepthPredictionDTO> predictions) {
         this.predictions = predictions;
+    }
+
+    public List<SurfaceObservationDTO> getSurfaceObservations() {
+        return surfaceObservations;
+    }
+
+    public void setSurfaceObservations(List<SurfaceObservationDTO> surfaceObservations) {
+        this.surfaceObservations = surfaceObservations;
     }
 }

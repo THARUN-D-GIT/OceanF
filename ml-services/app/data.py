@@ -508,17 +508,6 @@ class OceanEmbedDataLoader:
                     f"{expected}"
                 )
 
-            finite = int(
-                np.isfinite(values).sum()
-            )
-
-            if finite == 0:
-                raise ValueError(
-                    f"Required input variable "
-                    f"{feature} has no finite values "
-                    f"for {target} at the selected tile."
-                )
-
             feature_arrays[feature] = values
 
         metadata = {
@@ -872,18 +861,6 @@ class LiveOceanEmbedDataLoader:
                     f"{feature} live window has shape "
                     f"{values.shape}; expected "
                     f"{expected}"
-                )
-
-            finite = int(
-                np.isfinite(values).sum()
-            )
-
-            if finite == 0:
-                raise ValueError(
-                    f"Required live input variable "
-                    f"{feature} has no finite values "
-                    f"for {self.target_date} at the "
-                    f"selected tile."
                 )
 
             feature_arrays[feature] = values

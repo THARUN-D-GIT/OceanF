@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from math import isfinite
 from typing import Any
 
 import torch
@@ -16,6 +17,7 @@ from app.schemas import (
     DepthPrediction,
     PredictionRequest,
     PredictionResponse,
+    SurfaceObservation,
 )
 
 from scripts.inference.oceanembed_inference import (
@@ -38,6 +40,15 @@ logger = logging.getLogger("oceanembed.model")
 INPUT_SIZE = 64
 OUTPUT_SIZE = 32
 GRID_RESOLUTION = 0.25
+SURFACE_OBSERVATIONS = (
+    ("sst", "SST", "°C"),
+    ("sss", "SSS", "PSU"),
+    ("sla", "SLA", "m"),
+    ("uo", "U Current", "m/s"),
+    ("vo", "V Current", "m/s"),
+    ("u_wind", "U Wind", "m/s"),
+    ("v_wind", "V Wind", "m/s"),
+)
 
 
 class OceanEmbedModel:
@@ -440,16 +451,13 @@ class OceanEmbedModel:
             ),
         )
 
-        prediction = (
-            self.engine.predict_from_raw_window(
+        prediction, spread = (
+            self.engine.predict_from_raw_window_with_spread(
                 feature_arrays
             )
         )
 
-        if not isinstance(
-            prediction,
-            torch.Tensor,
-        ):
+        if not isinstance(prediction, torch.Tensor) or not isinstance(spread, torch.Tensor):
             raise RuntimeError(
                 "OceanEmbed inference returned "
                 "an unexpected type."
@@ -476,6 +484,13 @@ class OceanEmbedModel:
                 f"{expected_prediction_shape}."
             )
 
+        if tuple(spread.shape) != expected_prediction_shape:
+            raise RuntimeError(
+                "Unexpected OceanEmbed ensemble spread shape: "
+                f"{tuple(spread.shape)}. "
+                f"Expected {expected_prediction_shape}."
+            )
+
         # ----------------------------------------------------
         # 6. Validate prediction values.
         # ----------------------------------------------------
@@ -487,6 +502,11 @@ class OceanEmbedModel:
             raise RuntimeError(
                 "OceanEmbed prediction contains "
                 "non-finite values."
+            )
+
+        if not torch.isfinite(spread).all() or torch.any(spread < 0):
+            raise RuntimeError(
+                "OceanEmbed ensemble spread contains invalid values."
             )
 
         # ----------------------------------------------------
@@ -512,6 +532,11 @@ class OceanEmbedModel:
             )
 
         point_prediction = prediction[
+            :,
+            output_row,
+            output_col,
+        ]
+        point_spread = spread[
             :,
             output_row,
             output_col,
@@ -545,18 +570,34 @@ class OceanEmbedModel:
                     depth_index
                 ].item()
             )
+            ensemble_spread = float(
+                point_spread[depth_index].item()
+            )
 
             predictions.append(
                 DepthPrediction(
                     depth_m=depth,
                     temperature_c=temperature,
-                    uncertainty_c=None,
+                    uncertainty_c=ensemble_spread,
                 )
             )
 
-        # ----------------------------------------------------
-        # 9. Return snapped grid coordinates.
-        # ----------------------------------------------------
+        # Extract the final observation day at the exact input-grid
+        # point corresponding to the requested output pixel.
+        input_row = output_row + 16
+        input_col = output_col + 16
+        surface_observations: list[SurfaceObservation] = []
+        for feature, label, unit in SURFACE_OBSERVATIONS:
+            raw_value = float(
+                feature_arrays[feature][-1, input_row, input_col]
+            )
+            surface_observations.append(
+                SurfaceObservation(
+                    variable=label,
+                    value=raw_value if isfinite(raw_value) else None,
+                    unit=unit,
+                )
+            )
 
         snapped_latitude = float(
             metadata[
@@ -574,9 +615,16 @@ class OceanEmbedModel:
             latitude=snapped_latitude,
             longitude=snapped_longitude,
             date=request.date,
+            input_window_start=date.fromisoformat(
+                str(metadata["window_start"])
+            ),
+            input_window_end=date.fromisoformat(
+                str(metadata["window_end"])
+            ),
             model_version=self.model_version,
             grid_resolution=GRID_RESOLUTION,
             predictions=predictions,
+            surface_observations=surface_observations,
         )
 
     # ========================================================

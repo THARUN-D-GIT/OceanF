@@ -3,6 +3,7 @@ package com.oceanembed.backend.service;
 import com.oceanembed.backend.dto.*;
 import com.oceanembed.backend.entity.PredictionJob;
 import com.oceanembed.backend.entity.PredictionResult;
+import com.oceanembed.backend.entity.SurfaceObservationResult;
 import com.oceanembed.backend.exception.ModelServiceException;
 import com.oceanembed.backend.exception.ResourceNotFoundException;
 import com.oceanembed.backend.repository.PredictionJobRepository;
@@ -64,7 +65,13 @@ public class PredictionService {
             MlPredictionRequest mlRequest = toMlRequest(requestDto);
             MlPredictionResponse mlResponse = fastApiClient.predict(mlRequest);
 
-            job.setModelVersion(mlResponse.getModel_version());
+            job.setModelVersion(mlResponse.getModelVersion());
+            if (mlResponse.getInputWindowStart() != null) {
+                job.setInputWindowStart(mlResponse.getInputWindowStart());
+            }
+            if (mlResponse.getInputWindowEnd() != null) {
+                job.setInputWindowEnd(mlResponse.getInputWindowEnd());
+            }
             job.setStatus(PredictionJob.JobStatus.SUCCESS);
             job.setCompletedAt(Instant.now());
 
@@ -74,11 +81,23 @@ public class PredictionService {
                     job,
                     p.getDepth_m(),
                     p.getTemperature_c(),
-                    null
+                    p.getUncertainty_c()
                 ));
             }
 
             job.setResults(results);
+            List<SurfaceObservationResult> surfaceObservations = new ArrayList<>();
+            if (mlResponse.getSurfaceObservations() != null) {
+                for (MlSurfaceObservation observation : mlResponse.getSurfaceObservations()) {
+                    surfaceObservations.add(new SurfaceObservationResult(
+                        job,
+                        observation.getVariable(),
+                        observation.getValue(),
+                        observation.getUnit()
+                    ));
+                }
+            }
+            job.setSurfaceObservations(surfaceObservations);
             job = jobRepository.save(job);
             return toResponseDto(job);
 
@@ -154,6 +173,8 @@ public class PredictionService {
         dto.setLatitude(job.getLatitude());
         dto.setLongitude(job.getLongitude());
         dto.setDate(job.getRequestDate());
+        dto.setInputWindowStart(job.getInputWindowStart());
+        dto.setInputWindowEnd(job.getInputWindowEnd());
         dto.setModelVersion(job.getModelVersion());
         dto.setGridResolutionDeg(0.25);
         dto.setCreatedAt(job.getCreatedAt());
@@ -165,10 +186,20 @@ public class PredictionService {
             preds.add(new DepthPredictionDTO(
                 r.getDepthM(),
                 r.getTemperatureC(),
-                null
+                r.getUncertaintyC()
             ));
         }
         dto.setPredictions(preds);
+
+        List<SurfaceObservationDTO> surfaceObservations = new ArrayList<>();
+        for (SurfaceObservationResult observation : job.getSurfaceObservations()) {
+            surfaceObservations.add(new SurfaceObservationDTO(
+                observation.getVariable(),
+                observation.getValue(),
+                observation.getUnit()
+            ));
+        }
+        dto.setSurfaceObservations(surfaceObservations);
         return dto;
     }
 }

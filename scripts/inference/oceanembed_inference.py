@@ -1001,6 +1001,72 @@ class OceanEmbedEnsemble:
         return prediction[0]
 
 
+    @torch.no_grad()
+    def predict_from_raw_window_with_spread(
+        self,
+        feature_arrays: Dict[
+            str,
+            torch.Tensor,
+        ],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return the unchanged ensemble mean and three-seed spread."""
+        normalized_input = self.normalize_input_window(feature_arrays)
+        mean_temperature, spread_temperature = (
+            self.predict_temperature_with_spread(normalized_input)
+        )
+
+        if mean_temperature.shape[0] != 1 or spread_temperature.shape[0] != 1:
+            raise RuntimeError("Unexpected batch dimension in single prediction.")
+
+        return mean_temperature[0], spread_temperature[0]
+
+
+    @torch.no_grad()
+    def predict_temperature_with_spread(
+        self,
+        x: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Calculate population standard deviation across the three seed outputs."""
+        x = self._validate_model_input(x)
+        seed_predictions = []
+
+        for seed in SEEDS:
+            prediction = self.models[seed](x)
+            expected_shape = (
+                x.shape[0],
+                OUTPUT_CHANNELS,
+                OUTPUT_HEIGHT,
+                OUTPUT_WIDTH,
+            )
+            if tuple(prediction.shape) != expected_shape:
+                raise RuntimeError(
+                    f"Seed {seed} produced unexpected shape: {tuple(prediction.shape)}"
+                )
+            validate_finite(prediction, f"Prediction from seed {seed}")
+            seed_predictions.append(prediction)
+
+        stacked_predictions = torch.stack(seed_predictions, dim=0)
+        ensemble_mean = stacked_predictions.mean(dim=0)
+        ensemble_spread = stacked_predictions.std(dim=0, unbiased=False)
+
+        means = torch.tensor(
+            self.target_means,
+            dtype=ensemble_mean.dtype,
+            device=ensemble_mean.device,
+        ).view(1, OUTPUT_CHANNELS, 1, 1)
+        stds = torch.tensor(
+            self.target_stds,
+            dtype=ensemble_mean.dtype,
+            device=ensemble_mean.device,
+        ).view(1, OUTPUT_CHANNELS, 1, 1)
+
+        mean_temperature = ensemble_mean * stds + means
+        spread_temperature = ensemble_spread * stds
+        validate_finite(mean_temperature, "V1 ensemble temperature prediction")
+        validate_finite(spread_temperature, "V1 ensemble spread")
+        return mean_temperature, spread_temperature
+
+
     # -----------------------------------------------------------------
     # Single normalized-input prediction
     # -----------------------------------------------------------------

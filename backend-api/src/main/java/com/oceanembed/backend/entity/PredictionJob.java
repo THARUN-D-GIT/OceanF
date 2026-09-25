@@ -46,6 +46,9 @@ public class PredictionJob {
     @OneToMany(mappedBy = "job", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<PredictionResult> results = new ArrayList<>();
 
+    @OneToMany(mappedBy = "job", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<SurfaceObservationResult> surfaceObservations = new ArrayList<>();
+
     public enum JobStatus { PENDING, SUCCESS, FAILED }
 
     @PrePersist
@@ -92,4 +95,6 @@ public class PredictionJob {
     public void setCompletedAt(Instant completedAt) { this.completedAt = completedAt; }
     public List<PredictionResult> getResults() { return results; }
     public void setResults(List<PredictionResult> results) { this.results = results; }
+    public List<SurfaceObservationResult> getSurfaceObservations() { return surfaceObservations; }
+    public void setSurfaceObservations(List<SurfaceObservationResult> surfaceObservations) { this.surfaceObservations = surfaceObservations; }
 }
