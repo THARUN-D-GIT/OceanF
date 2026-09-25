@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any
 
 import torch
 
 from app.config import settings
-from app.data import OceanEmbedDataLoader
+from app.data import (
+    LIVE_DIR,
+    LiveOceanEmbedDataLoader,
+    OceanEmbedDataLoader,
+)
 from app.schemas import (
     DepthPrediction,
     PredictionRequest,
@@ -41,7 +46,8 @@ class OceanEmbedModel:
 
     Responsibilities:
     - Load the three-seed OceanEmbed ensemble.
-    - Load and validate harmonized NetCDF datasets.
+    - Load and validate historical harmonized NetCDF datasets.
+    - Detect and use live Copernicus-harmonized datasets when available.
     - Extract the real 7-day retrospective input window.
     - Run real OceanEmbed inference.
     - Return requested depth predictions at the requested location.
@@ -49,6 +55,8 @@ class OceanEmbedModel:
 
     def __init__(self) -> None:
         self.engine: OceanEmbedEnsemble | None = None
+
+        # Historical loader remains available as the fallback.
         self.data_loader: OceanEmbedDataLoader | None = None
 
         self.loaded: bool = False
@@ -60,9 +68,14 @@ class OceanEmbedModel:
             "cuda" if torch.cuda.is_available() else "cpu"
         )
 
+    # ========================================================
+    # MODEL LOADING
+    # ========================================================
+
     def load(self) -> None:
         """
-        Load the real OceanEmbed V1 ensemble and harmonized datasets.
+        Load the real OceanEmbed V1 ensemble and
+        historical harmonized datasets.
         """
 
         try:
@@ -70,6 +83,10 @@ class OceanEmbedModel:
                 "Loading OceanEmbed V1 model on %s...",
                 self.device,
             )
+
+            # ------------------------------------------------
+            # Load the real three-seed ensemble.
+            # ------------------------------------------------
 
             self.engine = OceanEmbedEnsemble(
                 device=self.device
@@ -79,15 +96,25 @@ class OceanEmbedModel:
                 "OceanEmbed V1 ensemble loaded successfully."
             )
 
+            # ------------------------------------------------
+            # Load historical datasets.
+            #
+            # These remain the fallback for historical dates.
+            # ------------------------------------------------
+
             logger.info(
-                "Loading harmonized OceanEmbed datasets..."
+                "Loading historical OceanEmbed datasets..."
             )
 
             self.data_loader = OceanEmbedDataLoader()
 
             logger.info(
-                "Harmonized OceanEmbed datasets loaded successfully."
+                "Historical OceanEmbed datasets loaded successfully."
             )
+
+            # ------------------------------------------------
+            # Validate frozen runtime contract.
+            # ------------------------------------------------
 
             self._validate_runtime_contract()
 
@@ -106,6 +133,10 @@ class OceanEmbedModel:
 
             raise
 
+    # ========================================================
+    # RUNTIME CONTRACT VALIDATION
+    # ========================================================
+
     def _validate_runtime_contract(self) -> None:
         """
         Validate the frozen OceanEmbed V1 inference contract.
@@ -118,7 +149,7 @@ class OceanEmbedModel:
 
         if self.data_loader is None:
             raise RuntimeError(
-                "OceanEmbed data loader is not loaded."
+                "OceanEmbed historical data loader is not loaded."
             )
 
         if HISTORY_DAYS != 7:
@@ -161,12 +192,162 @@ class OceanEmbedModel:
             "Runtime contract validation passed."
         )
 
+    # ========================================================
+    # DATE HANDLING
+    # ========================================================
+
+    def _parse_request_date(
+        self,
+        request_date: date | str,
+    ) -> date:
+        """
+        Normalize the request date.
+
+        Pydantic converts PredictionRequest.date into a
+        Python datetime.date object, but this method also
+        accepts a string for direct/internal callers.
+        """
+
+        if isinstance(request_date, date):
+            return request_date
+
+        return date.fromisoformat(
+            str(request_date)
+        )
+
+    # ========================================================
+    # LIVE DATA DETECTION
+    # ========================================================
+
+    def _live_file_for_date(
+        self,
+        target_date: date,
+    ):
+        """
+        Return the expected live harmonized NetCDF path.
+        """
+
+        return (
+            LIVE_DIR
+            / target_date.isoformat()
+            / (
+                f"oceanembed_live_"
+                f"{target_date.isoformat()}.nc"
+            )
+        )
+
+    # ========================================================
+    # INPUT WINDOW SELECTION
+    # ========================================================
+
+    def _get_input_window(
+        self,
+        request: PredictionRequest,
+    ):
+        """
+        Select the correct seven-day input source.
+
+        Priority:
+            1. Live Copernicus-harmonized dataset
+            2. Historical OceanEmbed dataset
+
+        Live file example:
+
+        data/processed/live/2026-09-20/
+            oceanembed_live_2026-09-20.nc
+        """
+
+        target_date = self._parse_request_date(
+            request.date
+        )
+
+        live_file = self._live_file_for_date(
+            target_date
+        )
+
+        # ----------------------------------------------------
+        # LIVE PATH
+        # ----------------------------------------------------
+
+        if live_file.exists():
+
+            logger.info(
+                "Using LIVE OceanEmbed dataset: %s",
+                live_file,
+            )
+
+            live_loader = None
+
+            try:
+                live_loader = LiveOceanEmbedDataLoader(
+                    target_date
+                )
+
+                feature_arrays, metadata = (
+                    live_loader.get_window(
+                        latitude=request.latitude,
+                        longitude=request.longitude,
+                    )
+                )
+
+                # Make the source explicit for debugging,
+                # API logging and frontend integration.
+                metadata["source"] = "live"
+
+                metadata["live_file"] = str(
+                    live_file
+                )
+
+                return (
+                    feature_arrays,
+                    metadata,
+                )
+
+            finally:
+                if live_loader is not None:
+                    live_loader.close()
+
+        # ----------------------------------------------------
+        # HISTORICAL FALLBACK
+        # ----------------------------------------------------
+
+        if self.data_loader is None:
+            raise RuntimeError(
+                "Historical OceanEmbed data loader is unavailable."
+            )
+
+        logger.info(
+            "Live dataset not found for %s. "
+            "Using historical OceanEmbed dataset.",
+            target_date.isoformat(),
+        )
+
+        feature_arrays, metadata = (
+            self.data_loader.get_window(
+                target_date=target_date,
+                latitude=request.latitude,
+                longitude=request.longitude,
+            )
+        )
+
+        metadata["source"] = "historical"
+
+        return (
+            feature_arrays,
+            metadata,
+        )
+
+    # ========================================================
+    # PREDICTION
+    # ========================================================
+
     def predict(
         self,
         request: PredictionRequest,
     ) -> PredictionResponse:
         """
-        Run real OceanEmbed inference for one location/date request.
+        Run real OceanEmbed inference for one
+        location/date request.
         """
 
         if not self.loaded:
@@ -179,40 +360,37 @@ class OceanEmbedModel:
                 "OceanEmbed inference engine is unavailable."
             )
 
-        if self.data_loader is None:
-            raise RuntimeError(
-                "OceanEmbed data loader is unavailable."
-            )
-
-        # --------------------------------------------------------
+        # ----------------------------------------------------
         # 1. Extract the real 7-day input window.
         #
-        # get_window() returns:
+        # This automatically chooses:
         #
-        #     (features, metadata)
+        # LIVE:
+        #   Copernicus-harmonized data
         #
-        # features:
-        #     sst     -> (7,64,64)
-        #     sss     -> (7,64,64)
-        #     sla     -> (7,64,64)
-        #     uo      -> (7,64,64)
-        #     vo      -> (7,64,64)
-        #     u_wind  -> (7,64,64)
-        #     v_wind  -> (7,64,64)
-        # --------------------------------------------------------
+        # OR
+        #
+        # HISTORICAL:
+        #   Original training/test harmonized data
+        # ----------------------------------------------------
 
-        feature_arrays, metadata = self.data_loader.get_window(
-            target_date=request.date,
-            latitude=request.latitude,
-            longitude=request.longitude,
+        feature_arrays, metadata = (
+            self._get_input_window(
+                request
+            )
         )
 
-        # --------------------------------------------------------
-        # 2. Validate feature contract.
-        # --------------------------------------------------------
+        # ----------------------------------------------------
+        # 2. Validate feature ordering.
+        # ----------------------------------------------------
 
-        expected_features = tuple(INPUT_FEATURES)
-        actual_features = tuple(feature_arrays.keys())
+        expected_features = tuple(
+            INPUT_FEATURES
+        )
+
+        actual_features = tuple(
+            feature_arrays.keys()
+        )
 
         if actual_features != expected_features:
             raise RuntimeError(
@@ -221,34 +399,65 @@ class OceanEmbedModel:
                 f"got {actual_features}."
             )
 
-        for feature_name in expected_features:
-            array = feature_arrays[feature_name]
+        # ----------------------------------------------------
+        # 3. Validate every input shape.
+        # ----------------------------------------------------
 
-            expected_feature_shape = (
-                HISTORY_DAYS,
-                INPUT_SIZE,
-                INPUT_SIZE,
-            )
+        expected_feature_shape = (
+            HISTORY_DAYS,
+            INPUT_SIZE,
+            INPUT_SIZE,
+        )
+
+        for feature_name in expected_features:
+
+            array = feature_arrays[
+                feature_name
+            ]
 
             if array.shape != expected_feature_shape:
                 raise RuntimeError(
-                    f"Unexpected shape for {feature_name}: "
+                    f"Unexpected shape for "
+                    f"{feature_name}: "
                     f"{array.shape}. "
-                    f"Expected {expected_feature_shape}."
+                    f"Expected "
+                    f"{expected_feature_shape}."
                 )
 
-        # --------------------------------------------------------
-        # 3. Run the real three-seed OceanEmbed ensemble.
-        # --------------------------------------------------------
+        # ----------------------------------------------------
+        # 4. Run the real three-seed ensemble.
+        # ----------------------------------------------------
 
-        prediction = self.engine.predict_from_raw_window(
-            feature_arrays
+        logger.info(
+            "Running OceanEmbed inference for "
+            "date=%s lat=%s lon=%s source=%s",
+            request.date,
+            request.latitude,
+            request.longitude,
+            metadata.get(
+                "source",
+                "unknown",
+            ),
         )
 
-        if not isinstance(prediction, torch.Tensor):
-            raise RuntimeError(
-                "OceanEmbed inference returned an unexpected type."
+        prediction = (
+            self.engine.predict_from_raw_window(
+                feature_arrays
             )
+        )
+
+        if not isinstance(
+            prediction,
+            torch.Tensor,
+        ):
+            raise RuntimeError(
+                "OceanEmbed inference returned "
+                "an unexpected type."
+            )
+
+        # ----------------------------------------------------
+        # 5. Validate prediction shape.
+        # ----------------------------------------------------
 
         expected_prediction_shape = (
             OUTPUT_CHANNELS,
@@ -256,21 +465,33 @@ class OceanEmbedModel:
             OUTPUT_SIZE,
         )
 
-        if tuple(prediction.shape) != expected_prediction_shape:
+        if tuple(
+            prediction.shape
+        ) != expected_prediction_shape:
+
             raise RuntimeError(
                 "Unexpected OceanEmbed prediction shape: "
                 f"{tuple(prediction.shape)}. "
-                f"Expected {expected_prediction_shape}."
+                f"Expected "
+                f"{expected_prediction_shape}."
             )
 
-        if not torch.isfinite(prediction).all():
+        # ----------------------------------------------------
+        # 6. Validate prediction values.
+        # ----------------------------------------------------
+
+        if not torch.isfinite(
+            prediction
+        ).all():
+
             raise RuntimeError(
-                "OceanEmbed prediction contains non-finite values."
+                "OceanEmbed prediction contains "
+                "non-finite values."
             )
 
-        # --------------------------------------------------------
-        # 4. Select the requested geographic point.
-        # --------------------------------------------------------
+        # ----------------------------------------------------
+        # 7. Get requested output pixel.
+        # ----------------------------------------------------
 
         output_row = int(
             metadata["output_row"]
@@ -296,20 +517,25 @@ class OceanEmbedModel:
             output_col,
         ]
 
-        # --------------------------------------------------------
-        # 5. Build requested depth response.
-        # --------------------------------------------------------
+        # ----------------------------------------------------
+        # 8. Build requested depth response.
+        # ----------------------------------------------------
 
-        predictions: list[DepthPrediction] = []
+        predictions: list[
+            DepthPrediction
+        ] = []
 
         for depth in request.depths:
 
             try:
-                depth_index = list(DEPTHS_M).index(
+                depth_index = list(
+                    DEPTHS_M
+                ).index(
                     depth
                 )
 
             except ValueError as exc:
+
                 raise ValueError(
                     f"Unsupported depth: {depth} m"
                 ) from exc
@@ -328,28 +554,38 @@ class OceanEmbedModel:
                 )
             )
 
-        # --------------------------------------------------------
-        # 6. Return snapped grid coordinates.
-        #
-        # Grid resolution is part of the frozen OceanEmbed
-        # scientific contract, so it is intentionally not read
-        # from Settings.
-        # --------------------------------------------------------
+        # ----------------------------------------------------
+        # 9. Return snapped grid coordinates.
+        # ----------------------------------------------------
+
+        snapped_latitude = float(
+            metadata[
+                "snapped_latitude"
+            ]
+        )
+
+        snapped_longitude = float(
+            metadata[
+                "snapped_longitude"
+            ]
+        )
 
         return PredictionResponse(
-            latitude=float(
-                metadata["snapped_latitude"]
-            ),
-            longitude=float(
-                metadata["snapped_longitude"]
-            ),
+            latitude=snapped_latitude,
+            longitude=snapped_longitude,
             date=request.date,
             model_version=self.model_version,
             grid_resolution=GRID_RESOLUTION,
             predictions=predictions,
         )
 
-    def get_model_info(self) -> dict[str, Any]:
+    # ========================================================
+    # MODEL INFORMATION
+    # ========================================================
+
+    def get_model_info(
+        self,
+    ) -> dict[str, Any]:
         """
         Return OceanEmbed V1 model metadata.
         """
@@ -361,12 +597,31 @@ class OceanEmbedModel:
 
         info = self.engine.get_model_info()
 
-        info["model_version"] = self.model_version
-        info["model_loaded"] = self.loaded
-        info["runtime_device"] = self.device
-        info["grid_resolution"] = GRID_RESOLUTION
+        info[
+            "model_version"
+        ] = self.model_version
+
+        info[
+            "model_loaded"
+        ] = self.loaded
+
+        info[
+            "runtime_device"
+        ] = self.device
+
+        info[
+            "grid_resolution"
+        ] = GRID_RESOLUTION
+
+        info[
+            "live_inference_enabled"
+        ] = True
 
         return info
+
+    # ========================================================
+    # CLOSE / CLEANUP
+    # ========================================================
 
     def close(self) -> None:
         """
@@ -374,18 +629,25 @@ class OceanEmbedModel:
         """
 
         self.loaded = False
+
         self.engine = None
 
         if self.data_loader is not None:
+
             try:
                 self.data_loader.close()
 
             except Exception:
                 logger.exception(
-                    "Failed to close OceanEmbed data loader cleanly."
+                    "Failed to close OceanEmbed "
+                    "data loader cleanly."
                 )
 
         self.data_loader = None
 
+
+# ============================================================
+# GLOBAL MODEL INSTANCE
+# ============================================================
 
 model = OceanEmbedModel()

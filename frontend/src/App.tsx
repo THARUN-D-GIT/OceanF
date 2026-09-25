@@ -9,7 +9,6 @@ import {
 import Plot from "react-plotly.js";
 
 import "./App.css";
-import DifferenceMap from "./components/DifferenceMap";
 import SurfaceInputs from "./components/SurfaceInputs";
 import { reconstructOcean } from "./api";
 import { DEPTHS } from "./types";
@@ -54,42 +53,6 @@ const REGION_CONFIG: Record<
   },
 };
 
-function temperature(
-  lat: number,
-  lon: number,
-  depth: number
-) {
-  const surface =
-    28 +
-    Math.sin(lat * 0.35) * 1.4 +
-    Math.cos(lon * 0.2) * 1.1;
-
-  const cooling = depth * 0.012;
-
-  const variation =
-    Math.sin(
-      lat * 0.8 +
-        lon * 0.15 +
-        depth * 0.015
-    ) * 0.7;
-
-  return Math.max(
-    3,
-    surface - cooling + variation
-  );
-}
-
-function tempToColor(temp: number) {
-  if (temp >= 28) return "#b91c1c";
-  if (temp >= 26) return "#ef4444";
-  if (temp >= 24) return "#f97316";
-  if (temp >= 22) return "#facc15";
-  if (temp >= 20) return "#22c55e";
-  if (temp >= 16) return "#06b6d4";
-  if (temp >= 12) return "#3b82f6";
-  return "#1d4ed8";
-}
-
 function MapRecenter({
   center,
 }: {
@@ -103,9 +66,7 @@ function MapRecenter({
 }
 
 function sleep(ms: number) {
-  return new Promise((resolve) =>
-    setTimeout(resolve, ms)
-  );
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export default function App() {
@@ -113,7 +74,7 @@ export default function App() {
     useState<Region>("Arabian Sea");
 
   const [date, setDate] =
-    useState("2025-12-01");
+    useState("2026-09-20");
 
   const [depth, setDepth] =
     useState<number>(100);
@@ -140,53 +101,74 @@ export default function App() {
 
   const config = REGION_CONFIG[region];
 
-  const mapPoints = useMemo(() => {
-    const points: {
-      lat: number;
-      lon: number;
-      temp: number;
-    }[] = [];
-
-    for (
-      let lat = config.latMin;
-      lat <= config.latMax;
-      lat += 1
-    ) {
-      for (
-        let lon = config.lonMin;
-        lon <= config.lonMax;
-        lon += 1
-      ) {
-        points.push({
-          lat,
-          lon,
-          temp: temperature(
-            lat,
-            lon,
-            depth
-          ),
-        });
-      }
-    }
-
-    return points;
-  }, [config, depth]);
-
   const currentPoint =
     selectedPoint ?? {
       lat: config.center[0],
       lon: config.center[1],
     };
 
- 
+  /*
+   * These are geographic grid points only.
+   *
+   * We deliberately do NOT generate synthetic temperatures here.
+   * The actual OceanEmbed API currently returns a point reconstruction,
+   * not a complete 2D temperature field.
+   */
+  const mapPoints = useMemo(() => {
+    const points: {
+      lat: number;
+      lon: number;
+    }[] = [];
+
+    for (
+      let lat = config.latMin;
+      lat <= config.latMax;
+      lat += 2
+    ) {
+      for (
+        let lon = config.lonMin;
+        lon <= config.lonMax;
+        lon += 2
+      ) {
+        points.push({
+          lat,
+          lon,
+        });
+      }
+    }
+
+    return points;
+  }, [config]);
+
+  const selectedPrediction =
+    apiResult?.predictions.find(
+      (prediction) =>
+        prediction.depthM === depth
+    ) ?? null;
+
+  const profileDepths =
+    apiResult?.predictions.map(
+      (prediction) => prediction.depthM
+    ) ?? DEPTHS;
+
+  const profileTemperatures =
+    apiResult?.predictions.map(
+      (prediction) =>
+        prediction.temperatureC
+    ) ?? [];
+
+  const profileUncertainty =
+    apiResult?.predictions.map(
+      (prediction) =>
+        prediction.uncertaintyC
+    ) ?? [];
+
+  const hasRealProfile =
+    apiResult !== null &&
+    apiResult.predictions.length > 0;
 
   const selectedUncertainty =
-    apiResult &&
-    apiResult.depths.includes(depth)
-      ? apiResult.uncertainty[
-          apiResult.depths.indexOf(depth)
-        ]
-      : 0.16;
+    selectedPrediction?.uncertaintyC ?? null;
 
   async function runDemo() {
     setLoading(true);
@@ -203,11 +185,11 @@ export default function App() {
     try {
       setDemoStage("surface");
 
-      await sleep(600);
+      await sleep(400);
 
       setDemoStage("embedding");
 
-      await sleep(500);
+      await sleep(400);
 
       const result =
         await reconstructOcean({
@@ -232,15 +214,21 @@ export default function App() {
             1000,
           ],
         });
+
       setApiResult(result);
 
       setDemoStage("subsurface");
 
-      await sleep(500);
+      await sleep(400);
 
+      /*
+       * ARGO is an independent validation source in the
+       * scientific workflow, but is not yet connected to
+       * this live frontend.
+       */
       setDemoStage("argo");
 
-      await sleep(500);
+      await sleep(300);
 
       setDemoStage("complete");
 
@@ -248,41 +236,17 @@ export default function App() {
     } catch (err) {
       console.error(err);
 
-      setError(
-        "Unable to run OceanEmbed reconstruction."
-      );
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Unable to run OceanEmbed reconstruction.";
 
+      setError(message);
       setDemoStage("idle");
     } finally {
       setLoading(false);
     }
   }
-
-  const profileDepths =
-    apiResult?.depths ?? [...DEPTHS];
-
-  const profileTemperatures =
-    apiResult?.temperature ??
-    profileDepths.map((d) =>
-      temperature(
-        currentPoint.lat,
-        currentPoint.lon,
-        d
-      )
-    );
-
-  const profileUncertainty =
-    apiResult?.uncertainty ??
-    profileDepths.map(
-      (d) => 0.12 + d * 0.00035
-    );
-
-  const argoTemperatures =
-    profileTemperatures.map(
-      (value, index) =>
-        value +
-        Math.sin(index * 1.7) * 0.18
-    );
 
   function stageLabel(stage: DemoStage) {
     switch (stage) {
@@ -296,7 +260,7 @@ export default function App() {
         return "Subsurface temperature reconstructed";
 
       case "argo":
-        return "ARGO validation prepared";
+        return "Independent ARGO validation stage";
 
       case "complete":
         return "Reconstruction complete";
@@ -345,7 +309,7 @@ export default function App() {
             </div>
 
             <div className="demoBadge">
-              DEMO MODE
+              LIVE MODEL
             </div>
           </div>
 
@@ -358,11 +322,15 @@ export default function App() {
               <select
                 id="region"
                 value={region}
-                onChange={(event) =>
+                onChange={(event) => {
                   setRegion(
                     event.target.value as Region
-                  )
-                }
+                  );
+                  setSelectedPoint(null);
+                  setApiResult(null);
+                  setPredicted(false);
+                  setDemoStage("idle");
+                }}
               >
                 <option>
                   Arabian Sea
@@ -383,9 +351,12 @@ export default function App() {
                 id="date"
                 type="date"
                 value={date}
-                onChange={(event) =>
-                  setDate(event.target.value)
-                }
+                onChange={(event) => {
+                  setDate(event.target.value);
+                  setApiResult(null);
+                  setPredicted(false);
+                  setDemoStage("idle");
+                }}
               />
             </div>
 
@@ -427,8 +398,7 @@ export default function App() {
 
           <div className="controlNote">
             North Indian Ocean · 0.25° grid ·
-            15 standard depths · GLORYS-trained
-            model concept
+            15 standard depths · OceanEmbed V1
           </div>
         </section>
 
@@ -436,7 +406,10 @@ export default function App() {
           {[
             ["surface", "Surface Observations"],
             ["embedding", "Ocean Embedding"],
-            ["subsurface", "Subsurface Reconstruction"],
+            [
+              "subsurface",
+              "Subsurface Reconstruction",
+            ],
             ["argo", "ARGO Validation"],
           ].map(
             ([stage, label], index) => {
@@ -513,9 +486,9 @@ export default function App() {
 
             <span>
               {loading
-                ? " Processing OceanEmbed pipeline..."
+                ? " Processing live OceanEmbed inference..."
                 : predicted
-                ? " Result available for visualization."
+                ? " Real backend result available for visualization."
                 : " Select parameters and run the reconstruction."}
             </span>
           </div>
@@ -544,11 +517,12 @@ export default function App() {
             <div className="cardHeader">
               <div>
                 <div className="cardLabel">
-                  SUBSURFACE TEMPERATURE
+                  RECONSTRUCTION LOCATION
                 </div>
 
                 <h2>
-                  {depth} m Temperature Field
+                  {depth} m Temperature
+                  Request
                 </h2>
               </div>
 
@@ -574,64 +548,83 @@ export default function App() {
                 />
 
                 {mapPoints.map(
-                  (point, index) => (
-                    <CircleMarker
-                      key={index}
-                      center={[
-                        point.lat,
-                        point.lon,
-                      ]}
-                      radius={8}
-                      pathOptions={{
-                        color:
-                          tempToColor(
-                            point.temp
-                          ),
-                        fillColor:
-                          tempToColor(
-                            point.temp
-                          ),
-                        fillOpacity: 0.75,
-                        weight: 1,
-                      }}
-                      eventHandlers={{
-                        click: () => {
-                          setSelectedPoint({
-                            lat: point.lat,
-                            lon: point.lon,
-                          });
-                        },
-                      }}
-                    >
-                      <Popup>
-                        <strong>
-                          OceanEmbed Grid Point
-                        </strong>
+                  (point, index) => {
+                    const isSelected =
+                      Math.abs(
+                        point.lat -
+                          currentPoint.lat
+                      ) < 0.001 &&
+                      Math.abs(
+                        point.lon -
+                          currentPoint.lon
+                      ) < 0.001;
 
-                        <br />
+                    return (
+                      <CircleMarker
+                        key={index}
+                        center={[
+                          point.lat,
+                          point.lon,
+                        ]}
+                        radius={
+                          isSelected ? 8 : 4
+                        }
+                        pathOptions={{
+                          color:
+                            isSelected
+                              ? "#111827"
+                              : "#2563eb",
+                          fillColor:
+                            isSelected
+                              ? "#ffffff"
+                              : "#3b82f6",
+                          fillOpacity:
+                            isSelected
+                              ? 1
+                              : 0.45,
+                          weight:
+                            isSelected
+                              ? 3
+                              : 1,
+                        }}
+                        eventHandlers={{
+                          click: () => {
+                            setSelectedPoint({
+                              lat: point.lat,
+                              lon: point.lon,
+                            });
 
-                        Latitude:{" "}
-                        {point.lat.toFixed(2)}
-                        °
+                            setApiResult(null);
+                            setPredicted(false);
+                            setDemoStage("idle");
+                          },
+                        }}
+                      >
+                        <Popup>
+                          <strong>
+                            OceanEmbed Grid
+                            Point
+                          </strong>
 
-                        <br />
+                          <br />
 
-                        Longitude:{" "}
-                        {point.lon.toFixed(2)}
-                        °
+                          Latitude:{" "}
+                          {point.lat.toFixed(
+                            2
+                          )}
+                          °
 
-                        <br />
+                          <br />
 
-                        Depth: {depth} m
-
-                        <br />
-
-                        Temperature:{" "}
-                        {point.temp.toFixed(2)}
-                        °C
-                      </Popup>
-                    </CircleMarker>
-                  )
+                          Longitude:{" "}
+                          {point.lon.toFixed(
+                            2
+                          )}
+                          °
+                        </Popup>
+                      </CircleMarker>
+                    );
+                  }
                 )}
 
                 <CircleMarker
@@ -667,6 +660,24 @@ export default function App() {
                       2
                     )}
                     °
+
+                    <br />
+
+                    {selectedPrediction ? (
+                      <>
+                        Depth: {depth} m
+                        <br />
+                        Temperature:{" "}
+                        {selectedPrediction.temperatureC.toFixed(
+                          2
+                        )} °C
+                      </>
+                    ) : (
+                      <>
+                        Run reconstruction to
+                        obtain temperature.
+                      </>
+                    )}
                   </Popup>
                 </CircleMarker>
               </MapContainer>
@@ -683,24 +694,22 @@ export default function App() {
 
               <div className="mapLegend">
                 <strong>
-                  Temperature (°C)
+                  OceanEmbed Selection Map
                 </strong>
 
-                <div className="legendGradient" />
-
                 <div className="legendLabels">
-                  <span>10</span>
-                  <span>15</span>
-                  <span>20</span>
-                  <span>25</span>
-                  <span>30</span>
+                  <span>
+                    Click a grid point to
+                    reconstruct
+                  </span>
                 </div>
               </div>
             </div>
 
             <div className="mapFooter">
-              Click any grid point to select a
-              reconstruction location.
+              Select a 0.25° grid location,
+              then run the real OceanEmbed
+              reconstruction.
             </div>
           </div>
 
@@ -729,44 +738,47 @@ export default function App() {
 
             <div className="card metrics">
               <div className="cardLabel">
-                MODEL PERFORMANCE
+                MODEL INFORMATION
               </div>
 
               <div className="metricGrid">
                 <div className="metric">
                   <strong>
-                    0.42
+                    {apiResult
+                      ? apiResult.modelVersion
+                      : "V1.0"}
                   </strong>
 
                   <span>
-                    RMSE °C
+                    MODEL VERSION
                   </span>
                 </div>
 
                 <div className="metric">
                   <strong>
-                    0.08
+                    0.25°
                   </strong>
 
                   <span>
-                    Bias °C
+                    GRID RESOLUTION
                   </span>
                 </div>
 
                 <div className="metric">
                   <strong>
-                    0.96
+                    15
                   </strong>
 
                   <span>
-                    Correlation
+                    DEPTH LEVELS
                   </span>
                 </div>
               </div>
 
               <div className="metricNote">
-                Illustrative validation metrics
-                for the demonstration interface.
+                Live predictions use the
+                OceanEmbed V1 three-seed
+                ensemble.
               </div>
             </div>
 
@@ -776,29 +788,35 @@ export default function App() {
               </div>
 
               <div className="uncertaintyValue">
-                ±{" "}
-                {selectedUncertainty.toFixed(
-                  2
-                )}{" "}
-                °C
+                {selectedUncertainty !==
+                null
+                  ? `± ${selectedUncertainty.toFixed(
+                      2
+                    )} °C`
+                  : "Not available"}
               </div>
 
               <div className="uncertaintyBar">
                 <div
                   className="uncertaintyFill"
                   style={{
-                    width: `${Math.min(
-                      100,
-                      selectedUncertainty *
-                        100
-                    )}%`,
+                    width:
+                      selectedUncertainty !==
+                      null
+                        ? `${Math.min(
+                            100,
+                            selectedUncertainty *
+                              100
+                          )}%`
+                        : "0%",
                   }}
                 />
               </div>
 
               <p>
-                Estimated uncertainty increases
-                with reconstruction depth.
+                The current backend does not
+                expose ensemble spread as a
+                prediction uncertainty value.
               </p>
             </div>
           </div>
@@ -812,24 +830,41 @@ export default function App() {
               </div>
 
               <h2>
-                Prediction − Reference
+                GLORYS Evaluation Status
               </h2>
 
               <p>
-                Spatial difference map for
-                qualitative validation.
+                Independent evaluation is
+                performed against held-out GLORYS
+                target data. Spatial difference
+                fields are not fabricated in the
+                live demo.
               </p>
             </div>
 
             <div className="surfaceBadge">
-              {depth} m
+              V1
             </div>
           </div>
 
-          <DifferenceMap
-            depth={depth}
-            region={region}
-          />
+          <div className="demoStatus">
+            <div className="demoStatusIcon">
+              ✓
+            </div>
+
+            <div>
+              <strong>
+                Held-out GLORYS evaluation
+                completed
+              </strong>
+
+              <span>
+                RMSE, MAE, bias and Pearson
+                correlation were evaluated
+                across the 15 target depths.
+              </span>
+            </div>
+          </div>
         </section>
 
         <section className="profileGrid">
@@ -841,37 +876,34 @@ export default function App() {
                 </div>
 
                 <h2>
-                  OceanEmbed vs ARGO
+                  OceanEmbed Temperature
+                  Profile
                 </h2>
               </div>
 
               <div className="surfaceBadge">
-                15 DEPTHS
+                {hasRealProfile
+                  ? "LIVE"
+                  : "15 DEPTHS"}
               </div>
             </div>
 
             <Plot
-              data={[
-                {
-                  x: profileTemperatures,
-                  y: profileDepths,
-                  mode: "lines+markers",
-                  name: "OceanEmbed",
-                  line: {
-                    width: 3,
-                  },
-                },
-                {
-                  x: argoTemperatures,
-                  y: profileDepths,
-                  mode: "lines+markers",
-                  name: "ARGO",
-                  line: {
-                    width: 2,
-                    dash: "dash",
-                  },
-                },
-              ]}
+              data={
+                hasRealProfile
+                  ? [
+                      {
+                        x: profileTemperatures,
+                        y: profileDepths,
+                        mode: "lines+markers",
+                        name: "OceanEmbed",
+                        line: {
+                          width: 3,
+                        },
+                      },
+                    ]
+                  : []
+              }
               layout={{
                 autosize: true,
                 margin: {
@@ -881,7 +913,8 @@ export default function App() {
                   b: 55,
                 },
                 xaxis: {
-                  title: "Temperature (°C)",
+                  title:
+                    "Temperature (°C)",
                   gridcolor:
                     "#e5e7eb",
                 },
@@ -903,6 +936,22 @@ export default function App() {
                   family:
                     "Inter, system-ui, sans-serif",
                 },
+                annotations: hasRealProfile
+                  ? []
+                  : [
+                      {
+                        text:
+                          "Run reconstruction to display the real temperature profile",
+                        showarrow: false,
+                        x: 0.5,
+                        y: 0.5,
+                        xref: "paper",
+                        yref: "paper",
+                        font: {
+                          size: 14,
+                        },
+                      },
+                    ],
               }}
               style={{
                 width: "100%",
@@ -954,17 +1003,22 @@ export default function App() {
                     </span>
 
                     <strong>
-                      {profileTemperatures[
-                        index
-                      ].toFixed(2)}
-                      °C
+                      {hasRealProfile
+                        ? `${profileTemperatures[
+                            index
+                          ].toFixed(2)} °C`
+                        : "—"}
                     </strong>
 
                     <span>
-                      ±
-                      {profileUncertainty[
+                      {hasRealProfile &&
+                      profileUncertainty[
                         index
-                      ].toFixed(2)}
+                      ] !== null
+                        ? `± ${profileUncertainty[
+                            index
+                          ]!.toFixed(2)}`
+                        : "N/A"}
                     </span>
                   </div>
                 )
@@ -987,11 +1041,15 @@ export default function App() {
               OceanEmbed reconstructs hidden
               subsurface temperature structure
               from surface-observed ocean state.
-              ARGO profiles provide an independent
-              reference for validation. The
-              displayed demonstration values are
-              synthetic until connected to the
-              trained inference service.
+              The live demo currently uses a
+              7-day retrospective surface window
+              and predicts the 15 specified
+              subsurface depths. GLORYS is used
+              for held-out model evaluation, while
+              ARGO is designated as the
+              independent observational validation
+              source. ARGO observations are not
+              yet connected to this live dashboard.
             </p>
           </div>
         </section>
@@ -1011,8 +1069,8 @@ export default function App() {
       {loading && (
         <div className="loadingBanner">
           <span className="statusDot" />
-          Running OceanEmbed reconstruction
-          pipeline...
+          Running live OceanEmbed
+          reconstruction pipeline...
         </div>
       )}
     </div>

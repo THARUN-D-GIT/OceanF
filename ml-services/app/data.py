@@ -12,7 +12,9 @@ from netCDF4 import Dataset, num2date
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ML_DIR = PROJECT_ROOT / "data" / "processed" / "ML"
 HARMONIZED_DIR = ML_DIR / "harmonized"
+LIVE_DIR = PROJECT_ROOT / "data" / "processed" / "live"
 CONFIG_PATH = ML_DIR / "ml_config.json"
+
 
 FEATURE_FILES = {
     "sst": "SST_harmonized.nc",
@@ -24,35 +26,66 @@ FEATURE_FILES = {
     "v_wind": "Winds_harmonized.nc",
 }
 
+
 FEATURE_VARIABLES = {
     "sst": ["sst", "analysed_sst", "sea_surface_temperature", "temperature"],
     "sss": ["sss", "so", "salinity", "sea_surface_salinity"],
-    "sla": ["sla", "adt", "ssh", "sea_level_anomaly", "sea_surface_height_anomaly"],
+    "sla": [
+        "sla",
+        "adt",
+        "ssh",
+        "sea_level_anomaly",
+        "sea_surface_height_anomaly",
+    ],
     "uo": ["uo", "u", "u_current", "eastward_current"],
     "vo": ["vo", "v", "v_current", "northward_current"],
-    "u_wind": ["u_wind", "u10", "u10m", "eastward_wind", "10m_u_component_of_wind"],
-    "v_wind": ["v_wind", "v10", "v10m", "northward_wind", "10m_v_component_of_wind"],
+    "u_wind": [
+        "u_wind",
+        "u10",
+        "u10m",
+        "eastward_wind",
+        "10m_u_component_of_wind",
+    ],
+    "v_wind": [
+        "v_wind",
+        "v10",
+        "v10m",
+        "northward_wind",
+        "10m_v_component_of_wind",
+    ],
 }
 
+
 FEATURES = tuple(FEATURE_FILES)
+
 HISTORY_DAYS = 7
 INPUT_SIZE = 64
 OUTPUT_SIZE = 32
 RESOLUTION = 0.25
+
 LAT_MIN = 5.0
 LAT_MAX = 30.0
 LON_MIN = 45.0
 LON_MAX = 105.0
+
 LAT_SIZE = 101
 LON_SIZE = 241
 
 
 class OceanEmbedDataLoader:
-    """Loads the real harmonized OceanEmbed seven-day spatial input window."""
+    """
+    Loads the real historical harmonized OceanEmbed seven-day
+    spatial input window.
+
+    This loader is intentionally kept compatible with the original
+    V1 historical ML pipeline.
+    """
 
     def __init__(self) -> None:
         if not CONFIG_PATH.exists():
-            raise FileNotFoundError(f"Required ML config not found: {CONFIG_PATH}")
+            raise FileNotFoundError(
+                f"Required ML config not found: {CONFIG_PATH}"
+            )
 
         with CONFIG_PATH.open("r", encoding="utf-8") as fh:
             self.config = json.load(fh)
@@ -72,8 +105,12 @@ class OceanEmbedDataLoader:
     def _open_and_validate(self) -> None:
         for feature, filename in FEATURE_FILES.items():
             path = HARMONIZED_DIR / filename
+
             if not path.exists():
-                raise FileNotFoundError(f"Required harmonized dataset not found: {path}")
+                raise FileNotFoundError(
+                    f"Required harmonized dataset not found: {path}"
+                )
+
             if path not in self._datasets:
                 self._datasets[path] = Dataset(path, "r")
 
@@ -82,32 +119,104 @@ class OceanEmbedDataLoader:
         reference_dates = None
 
         for feature in FEATURES:
-            ds = self._datasets[HARMONIZED_DIR / FEATURE_FILES[feature]]
-            self.variable_names[feature] = self._find_variable(ds, feature)
+            ds = self._datasets[
+                HARMONIZED_DIR / FEATURE_FILES[feature]
+            ]
 
-            lat = self._coordinate(ds, ("latitude", "lat")).astype(np.float64)
-            lon = self._coordinate(ds, ("longitude", "lon")).astype(np.float64)
+            self.variable_names[feature] = self._find_variable(
+                ds,
+                feature,
+            )
+
+            lat = self._coordinate(
+                ds,
+                ("latitude", "lat"),
+            ).astype(np.float64)
+
+            lon = self._coordinate(
+                ds,
+                ("longitude", "lon"),
+            ).astype(np.float64)
+
             dates = self._dates_from_dataset(ds)
 
-            if len(lat) != LAT_SIZE or not np.allclose(lat, np.arange(LAT_MIN, LAT_MAX + RESOLUTION / 2, RESOLUTION), atol=1e-5):
-                raise ValueError(f"{feature}: latitude grid does not match 5..30N at 0.25 degrees")
-            if len(lon) != LON_SIZE or not np.allclose(lon, np.arange(LON_MIN, LON_MAX + RESOLUTION / 2, RESOLUTION), atol=1e-5):
-                raise ValueError(f"{feature}: longitude grid does not match 45..105E at 0.25 degrees")
+            expected_lat = np.arange(
+                LAT_MIN,
+                LAT_MAX + RESOLUTION / 2,
+                RESOLUTION,
+            )
+
+            expected_lon = np.arange(
+                LON_MIN,
+                LON_MAX + RESOLUTION / 2,
+                RESOLUTION,
+            )
+
+            if (
+                len(lat) != LAT_SIZE
+                or not np.allclose(
+                    lat,
+                    expected_lat,
+                    atol=1e-5,
+                )
+            ):
+                raise ValueError(
+                    f"{feature}: latitude grid does not match "
+                    "5..30N at 0.25 degrees"
+                )
+
+            if (
+                len(lon) != LON_SIZE
+                or not np.allclose(
+                    lon,
+                    expected_lon,
+                    atol=1e-5,
+                )
+            ):
+                raise ValueError(
+                    f"{feature}: longitude grid does not match "
+                    "45..105E at 0.25 degrees"
+                )
 
             if reference_lat is None:
-                reference_lat, reference_lon, reference_dates = lat, lon, dates
+                reference_lat = lat
+                reference_lon = lon
+                reference_dates = dates
             else:
-                if not np.allclose(lat, reference_lat, atol=1e-5):
-                    raise ValueError(f"{feature}: latitude grid differs from reference")
-                if not np.allclose(lon, reference_lon, atol=1e-5):
-                    raise ValueError(f"{feature}: longitude grid differs from reference")
-                if dates != reference_dates:
-                    raise ValueError(f"{feature}: time axis differs from reference")
+                if not np.allclose(
+                    lat,
+                    reference_lat,
+                    atol=1e-5,
+                ):
+                    raise ValueError(
+                        f"{feature}: latitude grid differs "
+                        "from reference"
+                    )
 
-            variable = ds.variables[self.variable_names[feature]]
+                if not np.allclose(
+                    lon,
+                    reference_lon,
+                    atol=1e-5,
+                ):
+                    raise ValueError(
+                        f"{feature}: longitude grid differs "
+                        "from reference"
+                    )
+
+                if dates != reference_dates:
+                    raise ValueError(
+                        f"{feature}: time axis differs "
+                        "from reference"
+                    )
+
+            variable = ds.variables[
+                self.variable_names[feature]
+            ]
+
             if len(variable.dimensions) != 3:
                 raise ValueError(
-                    f"{feature}: expected [time, lat, lon], got {variable.dimensions}"
+                    f"{feature}: expected [time, lat, lon], "
+                    f"got {variable.dimensions}"
                 )
 
         self.latitudes = reference_lat
@@ -116,127 +225,297 @@ class OceanEmbedDataLoader:
 
         expected_start = self.config["time"]["common_start"]
         expected_end = self.config["time"]["common_end"]
-        if not self.dates or self.dates[0] != expected_start or self.dates[-1] != expected_end:
+
+        if (
+            not self.dates
+            or self.dates[0] != expected_start
+            or self.dates[-1] != expected_end
+        ):
             raise ValueError(
-                f"Unexpected harmonized time range: {self.dates[0]}..{self.dates[-1]}"
+                f"Unexpected harmonized time range: "
+                f"{self.dates[0]}..{self.dates[-1]}"
             )
 
     @staticmethod
-    def _find_variable(ds: Dataset, feature: str) -> str:
+    def _find_variable(
+        ds: Dataset,
+        feature: str,
+    ) -> str:
         for candidate in FEATURE_VARIABLES[feature]:
             if candidate in ds.variables:
                 return candidate
 
-        coordinate_names = {"time", "valid_time", "date", "latitude", "longitude", "lat", "lon", "depth"}
-        data_variables = [name for name in ds.variables if name not in coordinate_names]
+        coordinate_names = {
+            "time",
+            "valid_time",
+            "date",
+            "latitude",
+            "longitude",
+            "lat",
+            "lon",
+            "depth",
+        }
+
+        data_variables = [
+            name
+            for name in ds.variables
+            if name not in coordinate_names
+        ]
+
         if len(data_variables) == 1:
             return data_variables[0]
+
         raise KeyError(
-            f"Could not identify variable for {feature}; variables={list(ds.variables)}"
+            f"Could not identify variable for {feature}; "
+            f"variables={list(ds.variables)}"
         )
 
     @staticmethod
-    def _coordinate(ds: Dataset, names: tuple[str, ...]) -> np.ndarray:
+    def _coordinate(
+        ds: Dataset,
+        names: tuple[str, ...],
+    ) -> np.ndarray:
         for name in names:
             if name in ds.variables:
-                return np.asarray(ds.variables[name][:])
-        raise KeyError(f"Missing coordinate; tried {names}")
+                return np.asarray(
+                    ds.variables[name][:]
+                )
+
+        raise KeyError(
+            f"Missing coordinate; tried {names}"
+        )
 
     @staticmethod
-    def _dates_from_dataset(ds: Dataset) -> list[str]:
-        name = "time" if "time" in ds.variables else "valid_time"
+    def _dates_from_dataset(
+        ds: Dataset,
+    ) -> list[str]:
+        name = (
+            "time"
+            if "time" in ds.variables
+            else "valid_time"
+        )
+
         if name not in ds.variables:
-            raise KeyError("Missing time/valid_time coordinate")
+            raise KeyError(
+                "Missing time/valid_time coordinate"
+            )
+
         variable = ds.variables[name]
         values = variable[:]
-        units = getattr(variable, "units", None)
-        calendar = getattr(variable, "calendar", "standard")
+
+        units = getattr(
+            variable,
+            "units",
+            None,
+        )
+
+        calendar = getattr(
+            variable,
+            "calendar",
+            "standard",
+        )
+
         if units:
-            converted = num2date(values, units=units, calendar=calendar)
-            return [f"{v.year:04d}-{v.month:02d}-{v.day:02d}" for v in converted]
-        return [str(v)[:10] for v in values]
+            converted = num2date(
+                values,
+                units=units,
+                calendar=calendar,
+            )
+
+            return [
+                f"{v.year:04d}-{v.month:02d}-{v.day:02d}"
+                for v in converted
+            ]
+
+        return [
+            str(v)[:10]
+            for v in values
+        ]
 
     @staticmethod
-    def _masked_to_float32(values) -> np.ndarray:
+    def _masked_to_float32(
+        values,
+    ) -> np.ndarray:
         if np.ma.isMaskedArray(values):
             values = values.filled(np.nan)
-        return np.asarray(values, dtype=np.float32)
+
+        return np.asarray(
+            values,
+            dtype=np.float32,
+        )
 
     @staticmethod
-    def _tile_start(index: int, max_start: int) -> int:
-        # Same 64->32 centered target convention as the existing OceanEmbed dataset:
-        # target region is [tile+16 : tile+48].
-        return max(0, min(index - 16, max_start))
+    def _tile_start(
+        index: int,
+        max_start: int,
+    ) -> int:
+        """
+        Same 64->32 centered target convention as the
+        existing OceanEmbed dataset.
+
+        Target region:
+            [tile+16 : tile+48]
+        """
+
+        return max(
+            0,
+            min(
+                index - 16,
+                max_start,
+            ),
+        )
 
     def get_window(
         self,
         target_date: date,
         latitude: float,
         longitude: float,
-    ) -> tuple[dict[str, np.ndarray], dict[str, int | float | str]]:
-        if not (LAT_MIN <= latitude <= LAT_MAX):
-            raise ValueError(f"Latitude must be within {LAT_MIN}..{LAT_MAX}")
-        if not (LON_MIN <= longitude <= LON_MAX):
-            raise ValueError(f"Longitude must be within {LON_MIN}..{LON_MAX}")
+    ) -> tuple[
+        dict[str, np.ndarray],
+        dict[str, int | float | str],
+    ]:
+
+        if not (
+            LAT_MIN
+            <= latitude
+            <= LAT_MAX
+        ):
+            raise ValueError(
+                f"Latitude must be within "
+                f"{LAT_MIN}..{LAT_MAX}"
+            )
+
+        if not (
+            LON_MIN
+            <= longitude
+            <= LON_MAX
+        ):
+            raise ValueError(
+                f"Longitude must be within "
+                f"{LON_MIN}..{LON_MAX}"
+            )
 
         target = target_date.isoformat()
+
         if target not in self.dates:
             raise ValueError(
                 f"Requested date {target} is unavailable. "
-                f"Available range is {self.dates[0]}..{self.dates[-1]}."
+                f"Available range is "
+                f"{self.dates[0]}..{self.dates[-1]}."
             )
 
         target_index = self.dates.index(target)
-        window_start = target_index - HISTORY_DAYS + 1
+
+        window_start = (
+            target_index
+            - HISTORY_DAYS
+            + 1
+        )
+
         if window_start < 0:
             raise ValueError(
-                f"Requested date {target} does not have {HISTORY_DAYS} retrospective days."
+                f"Requested date {target} does not have "
+                f"{HISTORY_DAYS} retrospective days."
             )
 
         assert self.latitudes is not None
         assert self.longitudes is not None
 
-        lat_index = int(np.abs(self.latitudes - latitude).argmin())
-        lon_index = int(np.abs(self.longitudes - longitude).argmin())
-        snapped_lat = float(self.latitudes[lat_index])
-        snapped_lon = float(self.longitudes[lon_index])
+        lat_index = int(
+            np.abs(
+                self.latitudes - latitude
+            ).argmin()
+        )
 
-        tile_row = self._tile_start(lat_index, LAT_SIZE - INPUT_SIZE)
-        tile_col = self._tile_start(lon_index, LON_SIZE - INPUT_SIZE)
+        lon_index = int(
+            np.abs(
+                self.longitudes - longitude
+            ).argmin()
+        )
 
-        output_row = lat_index - (tile_row + 16)
-        output_col = lon_index - (tile_col + 16)
-        if not (0 <= output_row < OUTPUT_SIZE and 0 <= output_col < OUTPUT_SIZE):
+        snapped_lat = float(
+            self.latitudes[lat_index]
+        )
+
+        snapped_lon = float(
+            self.longitudes[lon_index]
+        )
+
+        tile_row = self._tile_start(
+            lat_index,
+            LAT_SIZE - INPUT_SIZE,
+        )
+
+        tile_col = self._tile_start(
+            lon_index,
+            LON_SIZE - INPUT_SIZE,
+        )
+
+        output_row = (
+            lat_index
+            - (tile_row + 16)
+        )
+
+        output_col = (
+            lon_index
+            - (tile_col + 16)
+        )
+
+        if not (
+            0 <= output_row < OUTPUT_SIZE
+            and
+            0 <= output_col < OUTPUT_SIZE
+        ):
             raise RuntimeError(
-                "Requested grid point could not be represented inside the 32x32 "
-                "prediction region of the selected 64x64 tile."
+                "Requested grid point could not be represented "
+                "inside the 32x32 prediction region of the "
+                "selected 64x64 tile."
             )
 
-        time_indices = range(window_start, target_index + 1)
-        feature_arrays: dict[str, np.ndarray] = {}
+        feature_arrays: dict[
+            str,
+            np.ndarray,
+        ] = {}
 
         for feature in FEATURES:
-            ds = self._datasets[HARMONIZED_DIR / FEATURE_FILES[feature]]
-            variable = ds.variables[self.variable_names[feature]]
+            ds = self._datasets[
+                HARMONIZED_DIR
+                / FEATURE_FILES[feature]
+            ]
+
+            variable = ds.variables[
+                self.variable_names[feature]
+            ]
 
             values = self._masked_to_float32(
                 variable[
-                    window_start : target_index + 1,
-                    tile_row : tile_row + INPUT_SIZE,
-                    tile_col : tile_col + INPUT_SIZE,
+                    window_start:target_index + 1,
+                    tile_row:tile_row + INPUT_SIZE,
+                    tile_col:tile_col + INPUT_SIZE,
                 ]
             )
 
-            expected = (HISTORY_DAYS, INPUT_SIZE, INPUT_SIZE)
+            expected = (
+                HISTORY_DAYS,
+                INPUT_SIZE,
+                INPUT_SIZE,
+            )
+
             if values.shape != expected:
                 raise RuntimeError(
-                    f"{feature} window has shape {values.shape}; expected {expected}"
+                    f"{feature} window has shape "
+                    f"{values.shape}; expected "
+                    f"{expected}"
                 )
 
-            finite = int(np.isfinite(values).sum())
+            finite = int(
+                np.isfinite(values).sum()
+            )
+
             if finite == 0:
                 raise ValueError(
-                    f"Required input variable {feature} has no finite values "
+                    f"Required input variable "
+                    f"{feature} has no finite values "
                     f"for {target} at the selected tile."
                 )
 
@@ -264,7 +543,374 @@ class OceanEmbedDataLoader:
                 ds.close()
             except Exception:
                 pass
+
         self._datasets.clear()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+class LiveOceanEmbedDataLoader:
+    """
+    Loads one seven-day live OceanEmbed harmonized NetCDF file.
+
+    Expected file:
+
+        data/processed/live/<date>/
+            oceanembed_live_<date>.nc
+
+    Expected variables:
+
+        sst
+        sss
+        sla
+        uo
+        vo
+        u_wind
+        v_wind
+
+    Expected dimensions:
+
+        time    = 7
+        latitude  = 101
+        longitude = 241
+    """
+
+    def __init__(
+        self,
+        target_date: date,
+    ) -> None:
+
+        self.target_date = target_date.isoformat()
+
+        self.path = (
+            LIVE_DIR
+            / self.target_date
+            / (
+                f"oceanembed_live_"
+                f"{self.target_date}.nc"
+            )
+        )
+
+        if not self.path.exists():
+            raise FileNotFoundError(
+                f"Live OceanEmbed dataset not found: "
+                f"{self.path}"
+            )
+
+        self.ds = Dataset(
+            self.path,
+            "r",
+        )
+
+        self.variable_names: dict[
+            str,
+            str,
+        ] = {}
+
+        self.dates: list[str] = []
+
+        self.latitudes: np.ndarray | None = None
+        self.longitudes: np.ndarray | None = None
+
+        try:
+            self._validate()
+        except Exception:
+            self.close()
+            raise
+
+    def _validate(self) -> None:
+        required_variables = [
+            "sst",
+            "sss",
+            "sla",
+            "uo",
+            "vo",
+            "u_wind",
+            "v_wind",
+        ]
+
+        for feature in required_variables:
+            if feature not in self.ds.variables:
+                raise KeyError(
+                    f"Live dataset is missing required "
+                    f"variable: {feature}"
+                )
+
+            self.variable_names[
+                feature
+            ] = feature
+
+        if "time" not in self.ds.variables:
+            raise KeyError(
+                "Live dataset is missing time coordinate."
+            )
+
+        if "latitude" not in self.ds.variables:
+            raise KeyError(
+                "Live dataset is missing latitude coordinate."
+            )
+
+        if "longitude" not in self.ds.variables:
+            raise KeyError(
+                "Live dataset is missing longitude coordinate."
+            )
+
+        self.latitudes = np.asarray(
+            self.ds.variables[
+                "latitude"
+            ][:],
+            dtype=np.float64,
+        )
+
+        self.longitudes = np.asarray(
+            self.ds.variables[
+                "longitude"
+            ][:],
+            dtype=np.float64,
+        )
+
+        self.dates = (
+            OceanEmbedDataLoader
+            ._dates_from_dataset(self.ds)
+        )
+
+        expected_lat = np.arange(
+            LAT_MIN,
+            LAT_MAX + RESOLUTION / 2,
+            RESOLUTION,
+        )
+
+        expected_lon = np.arange(
+            LON_MIN,
+            LON_MAX + RESOLUTION / 2,
+            RESOLUTION,
+        )
+
+        if (
+            len(self.latitudes) != LAT_SIZE
+            or not np.allclose(
+                self.latitudes,
+                expected_lat,
+                atol=1e-5,
+            )
+        ):
+            raise ValueError(
+                "Live dataset latitude grid does not "
+                "match 5..30N at 0.25 degrees."
+            )
+
+        if (
+            len(self.longitudes) != LON_SIZE
+            or not np.allclose(
+                self.longitudes,
+                expected_lon,
+                atol=1e-5,
+            )
+        ):
+            raise ValueError(
+                "Live dataset longitude grid does not "
+                "match 45..105E at 0.25 degrees."
+            )
+
+        if len(self.dates) != HISTORY_DAYS:
+            raise ValueError(
+                f"Live dataset must contain exactly "
+                f"{HISTORY_DAYS} days; got "
+                f"{len(self.dates)}."
+            )
+
+        if self.dates[-1] != self.target_date:
+            raise ValueError(
+                f"Live dataset final date is "
+                f"{self.dates[-1]}, expected "
+                f"{self.target_date}."
+            )
+
+        expected_shape = (
+            HISTORY_DAYS,
+            LAT_SIZE,
+            LON_SIZE,
+        )
+
+        for feature in required_variables:
+            variable = self.ds.variables[
+                feature
+            ]
+
+            if tuple(variable.shape) != expected_shape:
+                raise ValueError(
+                    f"{feature}: unexpected live "
+                    f"dataset shape "
+                    f"{tuple(variable.shape)}; "
+                    f"expected {expected_shape}."
+                )
+
+    def get_window(
+        self,
+        latitude: float,
+        longitude: float,
+    ) -> tuple[
+        dict[str, np.ndarray],
+        dict[str, int | float | str],
+    ]:
+
+        if not (
+            LAT_MIN
+            <= latitude
+            <= LAT_MAX
+        ):
+            raise ValueError(
+                f"Latitude must be within "
+                f"{LAT_MIN}..{LAT_MAX}"
+            )
+
+        if not (
+            LON_MIN
+            <= longitude
+            <= LON_MAX
+        ):
+            raise ValueError(
+                f"Longitude must be within "
+                f"{LON_MIN}..{LON_MAX}"
+            )
+
+        assert self.latitudes is not None
+        assert self.longitudes is not None
+
+        lat_index = int(
+            np.abs(
+                self.latitudes - latitude
+            ).argmin()
+        )
+
+        lon_index = int(
+            np.abs(
+                self.longitudes - longitude
+            ).argmin()
+        )
+
+        snapped_lat = float(
+            self.latitudes[lat_index]
+        )
+
+        snapped_lon = float(
+            self.longitudes[lon_index]
+        )
+
+        tile_row = (
+            OceanEmbedDataLoader
+            ._tile_start(
+                lat_index,
+                LAT_SIZE - INPUT_SIZE,
+            )
+        )
+
+        tile_col = (
+            OceanEmbedDataLoader
+            ._tile_start(
+                lon_index,
+                LON_SIZE - INPUT_SIZE,
+            )
+        )
+
+        output_row = (
+            lat_index
+            - (tile_row + 16)
+        )
+
+        output_col = (
+            lon_index
+            - (tile_col + 16)
+        )
+
+        if not (
+            0 <= output_row < OUTPUT_SIZE
+            and
+            0 <= output_col < OUTPUT_SIZE
+        ):
+            raise RuntimeError(
+                "Requested grid point could not be represented "
+                "inside the 32x32 prediction region of the "
+                "selected 64x64 tile."
+            )
+
+        feature_arrays: dict[
+            str,
+            np.ndarray,
+        ] = {}
+
+        for feature in FEATURES:
+            variable = self.ds.variables[
+                self.variable_names[feature]
+            ]
+
+            values = (
+                variable[
+                    :,
+                    tile_row:tile_row + INPUT_SIZE,
+                    tile_col:tile_col + INPUT_SIZE,
+                ]
+            )
+
+            values = (
+                OceanEmbedDataLoader
+                ._masked_to_float32(values)
+            )
+
+            expected = (
+                HISTORY_DAYS,
+                INPUT_SIZE,
+                INPUT_SIZE,
+            )
+
+            if values.shape != expected:
+                raise RuntimeError(
+                    f"{feature} live window has shape "
+                    f"{values.shape}; expected "
+                    f"{expected}"
+                )
+
+            finite = int(
+                np.isfinite(values).sum()
+            )
+
+            if finite == 0:
+                raise ValueError(
+                    f"Required live input variable "
+                    f"{feature} has no finite values "
+                    f"for {self.target_date} at the "
+                    f"selected tile."
+                )
+
+            feature_arrays[feature] = values
+
+        metadata = {
+            "target_date": self.target_date,
+            "window_start": self.dates[0],
+            "window_end": self.dates[-1],
+            "lat_index": lat_index,
+            "lon_index": lon_index,
+            "tile_row": tile_row,
+            "tile_col": tile_col,
+            "output_row": output_row,
+            "output_col": output_col,
+            "snapped_latitude": snapped_lat,
+            "snapped_longitude": snapped_lon,
+            "source": "live",
+            "live_file": str(self.path),
+        }
+
+        return feature_arrays, metadata
+
+    def close(self) -> None:
+        try:
+            self.ds.close()
+        except Exception:
+            pass
 
     def __del__(self) -> None:
         try:
