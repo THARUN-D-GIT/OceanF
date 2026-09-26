@@ -4,7 +4,13 @@ import Plot from "react-plotly.js";
 import "./App.css";
 import NorthIndianOceanMap from "./components/NorthIndianOceanMap";
 import SurfaceInputs from "./components/SurfaceInputs";
-import { fetchLiveStatus, OceanEmbedError, reconstructOcean } from "./api";
+import {
+  fetchLiveStatus,
+  fetchSurfaceCoverage,
+  OceanEmbedError,
+  reconstructOcean,
+} from "./api";
+import type { SurfaceCoverage as SurfaceCoveragePreflight } from "./api";
 import { DEPTHS } from "./types";
 import type { Region } from "./types";
 
@@ -32,10 +38,11 @@ const DOMAIN = {
 type ReconstructionError = "unsupported-location" | "request-failed";
 type ValidationState =
   | "CHECKING"
-  | "LIVE_STATUS_UNAVAILABLE"
+  | "CHECKING_COVERAGE"
+  | "COVERAGE_UNAVAILABLE"
   | "INCOMPLETE_INPUTS"
   | "OUTSIDE_DOMAIN"
-  | "DATE_UNAVAILABLE"
+  | "INCOMPLETE_DATA"
   | "INCOMPLETE_OBSERVATIONS"
   | "LOCATION_NOT_SUPPORTED"
   | "REQUEST_FAILED"
@@ -57,6 +64,16 @@ const REQUIRED_SURFACE_VARIABLES = [
   "U Wind",
   "V Wind",
 ] as const;
+
+const SURFACE_VARIABLE_LABELS: Record<string, string> = {
+  sst: "SST",
+  sss: "SSS",
+  sla: "SLA",
+  uo: "U Current",
+  vo: "V Current",
+  u_wind: "U Wind",
+  v_wind: "V Wind",
+};
 
 const UNSUPPORTED_LOCATION_MESSAGE =
   "This location is within the North Indian Ocean domain, but it cannot currently be represented by the model's prediction tile.";
@@ -129,11 +146,13 @@ function App() {
   const [longitudeInput, setLongitudeInput] = useState("65.5");
   const [liveStatus, setLiveStatus] = useState<Awaited<ReturnType<typeof fetchLiveStatus>> | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
-  const [statusError, setStatusError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ReconstructionError | null>(null);
   const [surfaceCoverageByRequest, setSurfaceCoverageByRequest] =
     useState<Record<string, SurfaceCoverage>>({});
+  const [preflightCoverageByRequest, setPreflightCoverageByRequest] =
+    useState<Record<string, SurfaceCoveragePreflight>>({});
+  const [coverageErrorKey, setCoverageErrorKey] = useState<string | null>(null);
   const [demoStage, setDemoStage] = useState<DemoStage>("idle");
   const [apiResult, setApiResult] = useState<Awaited<ReturnType<typeof reconstructOcean>> | null>(null);
 
@@ -151,6 +170,14 @@ function App() {
         requestKey(selectedPoint.lat, selectedPoint.lon, date)
       ]
     : undefined;
+  const selectedRequestKey = selectedPoint.lat !== null
+    && selectedPoint.lon !== null
+    && date
+    ? requestKey(selectedPoint.lat, selectedPoint.lon, date)
+    : null;
+  const preflightCoverage = selectedRequestKey
+    ? preflightCoverageByRequest[selectedRequestKey]
+    : undefined;
   const coordinateRangeMessage = selectedPoint.lat !== null
     && (selectedPoint.lat < DOMAIN.latitudeMin
       || selectedPoint.lat > DOMAIN.latitudeMax)
@@ -160,6 +187,15 @@ function App() {
         || selectedPoint.lon > DOMAIN.longitudeMax)
       ? "Longitude must be between 45°E and 105°E."
       : "Select a coordinate inside 5°N–30°N and 45°E–105°E.";
+
+  const shouldCheckCoverage = selectedPoint.lat !== null
+    && selectedPoint.lon !== null
+    && selectedPoint.lat >= DOMAIN.latitudeMin
+    && selectedPoint.lat <= DOMAIN.latitudeMax
+    && selectedPoint.lon >= DOMAIN.longitudeMin
+    && selectedPoint.lon <= DOMAIN.longitudeMax
+    && Boolean(date)
+    && !statusLoading;
 
   let validationState: ValidationState;
   if (selectedPoint.lat === null || selectedPoint.lon === null) {
@@ -175,14 +211,12 @@ function App() {
     validationState = "INCOMPLETE_INPUTS";
   } else if (statusLoading) {
     validationState = "CHECKING";
-  } else if (statusError) {
-    validationState = "LIVE_STATUS_UNAVAILABLE";
-  } else if (
-    !liveStatus?.ready
-    || !latestUsableDate
-    || date > latestUsableDate
-  ) {
-    validationState = "DATE_UNAVAILABLE";
+  } else if (selectedRequestKey && coverageErrorKey === selectedRequestKey) {
+    validationState = "COVERAGE_UNAVAILABLE";
+  } else if (!preflightCoverage) {
+    validationState = "CHECKING_COVERAGE";
+  } else if (!preflightCoverage.ready) {
+    validationState = "INCOMPLETE_DATA";
   } else if (selectedCoverage && selectedCoverage.count < REQUIRED_SURFACE_VARIABLES.length) {
     validationState = "INCOMPLETE_OBSERVATIONS";
   } else if (error === "unsupported-location") {
@@ -201,14 +235,12 @@ function App() {
       .then((status) => {
         if (cancelled) return;
         setLiveStatus(status);
-        setStatusError(false);
         if (status.latestUsableDate) {
           setDate(status.latestUsableDate);
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setStatusError(true);
           setLiveStatus(null);
         }
       })
@@ -221,6 +253,50 @@ function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const latitude = selectedPoint.lat;
+    const longitude = selectedPoint.lon;
+    if (
+      !shouldCheckCoverage
+      || !selectedRequestKey
+      || preflightCoverage
+      || latitude === null
+      || longitude === null
+    ) {
+      return;
+    }
+    let cancelled = false;
+    setCoverageErrorKey(null);
+    fetchSurfaceCoverage({
+      latitude,
+      longitude,
+      date,
+    })
+      .then((coverage) => {
+        if (!cancelled) {
+          setPreflightCoverageByRequest((current) => ({
+            ...current,
+            [selectedRequestKey]: coverage,
+          }));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCoverageErrorKey(selectedRequestKey);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    date,
+    preflightCoverage,
+    selectedPoint.lat,
+    selectedPoint.lon,
+    selectedRequestKey,
+    shouldCheckCoverage,
+  ]);
 
   const profileDepths = apiResult?.predictions.map((prediction) => prediction.depthM) ?? DEPTHS;
   const profileTemperatures = apiResult?.predictions.map((prediction) => prediction.temperatureC) ?? [];
@@ -294,6 +370,7 @@ function App() {
       !reconstructionAllowed
       || selectedPoint.lat === null
       || selectedPoint.lon === null
+      || !preflightCoverage?.ready
       || (selectedCoverage && selectedCoverage.count < REQUIRED_SURFACE_VARIABLES.length)
     ) {
       setApiResult(null);
@@ -340,6 +417,10 @@ function App() {
       }
 
       setApiResult(result);
+      document.querySelector<HTMLElement>(".surfaceInputs")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
       setDemoStage("subsurface");
       await sleep(450);
       setDemoStage("complete");
@@ -414,11 +495,9 @@ function App() {
             <strong>
               {statusLoading
                 ? "CHECKING"
-                : statusError
-                  ? "UNAVAILABLE"
-                  : liveStatus?.ready
+                : liveStatus?.ready
                     ? "LIVE / READY"
-                    : "NOT READY"}
+                    : "CHECK BY TARGET DATE"}
             </strong>
             {liveStatus?.lastChecked && (
               <small className="context-meta">Last checked: {liveStatus.lastChecked}</small>
@@ -494,7 +573,6 @@ function App() {
                 <input
                   id="date"
                   type="date"
-                  max={latestUsableDate ?? undefined}
                   value={date}
                   onChange={(event) => {
                     setDate(event.target.value);
@@ -612,14 +690,16 @@ function App() {
                   ? stageLabel(demoStage)
                   : validationState === "CHECKING"
                     ? "CHECKING LIVE DATA"
-                    : validationState === "LIVE_STATUS_UNAVAILABLE"
-                      ? "LIVE DATA STATUS UNAVAILABLE"
+                    : validationState === "CHECKING_COVERAGE"
+                      ? "CHECKING SURFACE DATA"
+                    : validationState === "COVERAGE_UNAVAILABLE"
+                        ? "SURFACE DATA STATUS UNAVAILABLE"
                       : validationState === "INCOMPLETE_INPUTS"
                         ? "INCOMPLETE INPUTS"
                         : validationState === "OUTSIDE_DOMAIN"
                           ? "OUTSIDE SUPPORTED DOMAIN"
-                          : validationState === "DATE_UNAVAILABLE"
-                            ? "DATA NOT READY"
+                          : validationState === "INCOMPLETE_DATA"
+                              ? "INCOMPLETE DATA"
                             : validationState === "INCOMPLETE_OBSERVATIONS"
                               ? "RECONSTRUCTION UNAVAILABLE"
                               : validationState === "LOCATION_NOT_SUPPORTED"
@@ -634,15 +714,17 @@ function App() {
                 {loading
                   ? "Processing OceanEmbed inference using the retrospective 7-day input window."
                   : validationState === "CHECKING"
-                    ? "Checking the latest usable date and available input variables."
-                    : validationState === "LIVE_STATUS_UNAVAILABLE"
-                      ? "Live data availability could not be checked. Please try again later."
+                    ? "Loading current system availability."
+                    : validationState === "CHECKING_COVERAGE"
+                      ? `Checking and preparing ${shiftIsoDate(date, -6)} → ${date}; only data through the requested target date is used.`
+                    : validationState === "COVERAGE_UNAVAILABLE"
+                        ? "Surface data coverage could not be verified. Reconstruction is disabled."
                       : validationState === "INCOMPLETE_INPUTS"
-                        ? "Enter a numeric latitude, longitude, and target date."
-                        : validationState === "OUTSIDE_DOMAIN"
-                          ? coordinateRangeMessage
-                          : validationState === "DATE_UNAVAILABLE"
-                            ? `Latest usable date: ${latestUsableDate ? formatLiveDate(latestUsableDate) : "unavailable"}. The selected date does not have a complete retrospective input window.`
+                      ? "Enter a numeric latitude, longitude, and target date."
+                      : validationState === "OUTSIDE_DOMAIN"
+                        ? coordinateRangeMessage
+                        : validationState === "INCOMPLETE_DATA"
+                            ? `Input window: ${preflightCoverage?.windowStart ?? shiftIsoDate(date, -6)} → ${preflightCoverage?.windowEnd ?? date}. ${preflightCoverage?.missingDates.length ? `Missing date(s): ${preflightCoverage.missingDates.join(", ")}. ` : ""}${preflightCoverage?.variablesReady ?? 0}/${preflightCoverage?.requiredVariables ?? 7} variables available${preflightCoverage?.missingVariables.length ? `. Missing variable(s): ${preflightCoverage.missingVariables.map((variable) => SURFACE_VARIABLE_LABELS[variable] ?? variable).join(", ")}` : ""}.`
                             : validationState === "INCOMPLETE_OBSERVATIONS"
                               ? "Required surface observations are incomplete."
                               : validationState === "LOCATION_NOT_SUPPORTED"
@@ -651,7 +733,7 @@ function App() {
                                   ? "The reconstruction could not be completed. Please try again."
                                   : demoStage === "complete"
                                     ? "REAL BACKEND RESULT AVAILABLE"
-                                    : "Location is inside the supported domain and the selected date is available."}
+                                    : `Location is inside the supported domain. Input window: ${preflightCoverage?.windowStart ?? shiftIsoDate(date, -6)} → ${preflightCoverage?.windowEnd ?? date}.`}
               </div>
               {validationState === "LOCATION_NOT_SUPPORTED" && (
                 <div className="status-banner-copy">{UNSUPPORTED_LOCATION_HELPER}</div>
@@ -663,8 +745,12 @@ function App() {
 
         <SurfaceInputs
           observations={selectedCoverage?.observations ?? apiResult?.surfaceObservations}
-          coverageCount={selectedCoverage?.count ?? 0}
-          coverageKnown={selectedCoverage !== undefined}
+          coverageCount={
+            selectedCoverage?.count
+            ?? preflightCoverage?.variablesReady
+            ?? 0
+          }
+          coverageKnown={selectedCoverage !== undefined || preflightCoverage !== undefined}
           targetDate={apiResult?.date ?? date}
           inputWindowStart={apiResult?.inputWindowStart ?? shiftIsoDate(date, -6)}
           inputWindowEnd={apiResult?.inputWindowEnd ?? date}
