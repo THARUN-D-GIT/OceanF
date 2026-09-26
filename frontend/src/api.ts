@@ -11,28 +11,285 @@ export interface DepthPrediction {
   uncertaintyC: number | null;
 }
 
+export interface SurfaceObservation {
+  variable: string;
+  value: number | null;
+  unit: string;
+}
+
+export interface LiveStatus {
+  latestUsableDate: string | null;
+  inputWindowStart: string | null;
+  inputWindowEnd: string | null;
+  variablesReady: string[];
+  variablesReadyCount: number;
+  requiredVariablesCount: number;
+  lastChecked: string | null;
+  message: string | null;
+  ready: boolean;
+}
+
 export interface OceanEmbedResponse {
   jobId: number;
   status: string;
   latitude: number;
   longitude: number;
   date: string;
+  inputWindowStart?: string;
+  inputWindowEnd?: string;
   modelVersion: string;
   gridResolutionDeg: number;
   createdAt: string;
   completedAt: string | null;
   errorMessage: string | null;
   predictions: DepthPrediction[];
+  surfaceObservations?: SurfaceObservation[];
 
   depths: number[];
   temperature: number[];
-  uncertainty: number[];
+  uncertainty: Array<number | null>;
   model_version: string;
+}
+
+type JsonRecord = Record<string, unknown>;
+
+export type OceanEmbedErrorKind = "unsupported-location" | "request-failed";
+
+export class OceanEmbedError extends Error {
+  readonly kind: OceanEmbedErrorKind;
+
+  constructor(kind: OceanEmbedErrorKind) {
+    super(kind === "unsupported-location"
+      ? "Location is not currently supported."
+      : "The reconstruction could not be completed. Please try again.");
+    this.name = "OceanEmbedError";
+    this.kind = kind;
+  }
 }
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ??
   "http://127.0.0.1:8080";
+
+function containsUnsupportedGridError(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.toLowerCase().includes(
+      "requested grid point could not be represented inside the 32x32 prediction region of the selected 64x64 tile",
+    );
+  }
+
+  if (Array.isArray(value)) {
+    return value.some(containsUnsupportedGridError);
+  }
+
+  if (value !== null && typeof value === "object") {
+    return Object.values(value).some(containsUnsupportedGridError);
+  }
+
+  return false;
+}
+
+function parseResponseBody(responseText: string): unknown {
+  try {
+    return JSON.parse(responseText);
+  } catch {
+    return null;
+  }
+}
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readField(record: JsonRecord, ...names: string[]): unknown {
+  for (const name of names) {
+    if (name in record) {
+      return record[name];
+    }
+  }
+  return undefined;
+}
+
+function requiredNumber(record: JsonRecord, ...names: string[]): number {
+  const value = readField(record, ...names);
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new OceanEmbedError("request-failed");
+  }
+  return value;
+}
+
+function requiredString(record: JsonRecord, ...names: string[]): string {
+  const value = readField(record, ...names);
+  if (typeof value !== "string") {
+    throw new OceanEmbedError("request-failed");
+  }
+  return value;
+}
+
+function nullableNumber(record: JsonRecord, ...names: string[]): number | null {
+  const value = readField(record, ...names);
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new OceanEmbedError("request-failed");
+  }
+  return value;
+}
+
+function nullableString(record: JsonRecord, ...names: string[]): string | null {
+  const value = readField(record, ...names);
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new OceanEmbedError("request-failed");
+  }
+  return value;
+}
+
+function readStringList(record: JsonRecord, ...names: string[]): string[] {
+  const value = readField(record, ...names);
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+export async function fetchLiveStatus(): Promise<LiveStatus> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/live/status`);
+  if (!response.ok) {
+    throw new OceanEmbedError("request-failed");
+  }
+
+  let responseBody: unknown;
+  try {
+    responseBody = await response.json();
+  } catch {
+    throw new OceanEmbedError("request-failed");
+  }
+
+  if (!isJsonRecord(responseBody)) {
+    throw new OceanEmbedError("request-failed");
+  }
+
+  const record = isJsonRecord(responseBody.data)
+    ? responseBody.data
+    : responseBody;
+  const variablesReady = readStringList(
+    record,
+    "readyVariables",
+    "ready_variables",
+    "variablesReady",
+    "variables_ready",
+    "surfaceVariablesReady",
+    "surface_variables_ready",
+  );
+  const rawVariablesReady = readField(record, "variablesReady", "variables_ready");
+  const legacyCount = readField(
+    record,
+    "variablesReadyCount",
+    "variables_ready_count",
+    "surfaceVariablesReadyCount",
+    "surface_variables_ready_count",
+    "variableCount",
+    "variable_count",
+  );
+  const variablesReadyCount = typeof rawVariablesReady === "number"
+    && Number.isFinite(rawVariablesReady)
+    ? rawVariablesReady
+    : typeof rawVariablesReady === "boolean"
+      ? rawVariablesReady ? 7 : 0
+      : typeof legacyCount === "number" && Number.isFinite(legacyCount)
+        ? legacyCount
+        : variablesReady.length;
+  const rawRequiredVariables = readField(
+    record,
+    "requiredVariables",
+    "required_variables",
+  );
+  const legacyRequiredCount = readField(
+    record,
+    "requiredVariablesCount",
+    "required_variables_count",
+  );
+  const requiredVariablesCount = typeof rawRequiredVariables === "number"
+    && Number.isFinite(rawRequiredVariables)
+    ? rawRequiredVariables
+    : typeof legacyRequiredCount === "number" && Number.isFinite(legacyRequiredCount)
+      ? legacyRequiredCount
+      : 7;
+  const rawReadiness = readField(record, "ready", "dataReady", "data_ready");
+  const rawStatus = readField(record, "status");
+  const readinessFlag = typeof rawReadiness === "boolean"
+    ? rawReadiness
+    : typeof rawVariablesReady === "boolean"
+      ? rawVariablesReady
+      : null;
+  const latestUsableDate = nullableString(
+    record,
+    "latestUsableDate",
+    "latest_usable_date",
+    "latestDate",
+    "latest_date",
+  );
+  const inputWindowStart = nullableString(
+    record,
+    "inputWindowStart",
+    "input_window_start",
+  );
+  const inputWindowEnd = nullableString(
+    record,
+    "inputWindowEnd",
+    "input_window_end",
+  );
+  const ready = readinessFlag
+    ?? (typeof rawStatus === "string"
+      ? rawStatus.toLowerCase() === "ready"
+      : variablesReadyCount >= requiredVariablesCount);
+  const message = nullableString(record, "message");
+  const lastChecked = nullableString(record, "lastChecked", "last_checked");
+
+  return {
+    latestUsableDate,
+    inputWindowStart,
+    inputWindowEnd,
+    variablesReady,
+    variablesReadyCount,
+    requiredVariablesCount,
+    lastChecked,
+    message,
+    ready,
+  };
+}
+
+function normalizePrediction(value: unknown): DepthPrediction {
+  if (!isJsonRecord(value)) {
+    throw new OceanEmbedError("request-failed");
+  }
+  return {
+    depthM: requiredNumber(value, "depthM", "depth_m"),
+    temperatureC: requiredNumber(value, "temperatureC", "temperature_c"),
+    uncertaintyC: nullableNumber(
+      value,
+      "uncertaintyC",
+      "uncertainty_c",
+      "ensembleSpreadC",
+      "ensemble_spread_c",
+    ),
+  };
+}
+
+function normalizeSurfaceObservation(value: unknown): SurfaceObservation {
+  if (!isJsonRecord(value)) {
+    throw new OceanEmbedError("request-failed");
+  }
+  return {
+    variable: requiredString(value, "variable"),
+    value: nullableNumber(value, "value"),
+    unit: requiredString(value, "unit"),
+  };
+}
 
 export async function reconstructOcean(
   request: OceanEmbedRequest
@@ -51,19 +308,81 @@ export async function reconstructOcean(
   const responseText = await response.text();
 
   if (!response.ok) {
-    throw new Error(
-      `OceanEmbed API request failed (${response.status}): ${responseText}`
+    const responseBody = parseResponseBody(responseText);
+    const unsupportedLocation = containsUnsupportedGridError(responseBody)
+      || containsUnsupportedGridError(responseText);
+    throw new OceanEmbedError(
+      unsupportedLocation ? "unsupported-location" : "request-failed",
     );
   }
 
-  const backendResult = JSON.parse(responseText);
+  let parsedResponse: unknown;
+  try {
+    parsedResponse = JSON.parse(responseText);
+  } catch {
+    throw new OceanEmbedError("request-failed");
+  }
 
-  const predictions: DepthPrediction[] =
-    backendResult.predictions ?? [];
+  if (!isJsonRecord(parsedResponse)) {
+    throw new OceanEmbedError("request-failed");
+  }
+
+  const backendResult = parsedResponse;
+  const predictionsValue = readField(backendResult, "predictions");
+  if (!Array.isArray(predictionsValue)) {
+    throw new OceanEmbedError("request-failed");
+  }
+  const predictions = predictionsValue.map(normalizePrediction);
+
+  const surfaceObservationsValue = readField(
+    backendResult,
+    "surfaceObservations",
+    "surface_observations",
+  );
+  if (
+    surfaceObservationsValue !== undefined
+    && !Array.isArray(surfaceObservationsValue)
+  ) {
+    throw new OceanEmbedError("request-failed");
+  }
+  const surfaceObservations = Array.isArray(surfaceObservationsValue)
+    ? surfaceObservationsValue.map(normalizeSurfaceObservation)
+    : undefined;
+
+  const inputWindowStart = nullableString(
+    backendResult,
+    "inputWindowStart",
+    "input_window_start",
+  );
+  const inputWindowEnd = nullableString(
+    backendResult,
+    "inputWindowEnd",
+    "input_window_end",
+  );
+  const modelVersion = requiredString(
+    backendResult,
+    "modelVersion",
+    "model_version",
+  );
 
   return {
-    ...backendResult,
-
+    jobId: requiredNumber(backendResult, "jobId", "job_id"),
+    status: requiredString(backendResult, "status"),
+    latitude: requiredNumber(backendResult, "latitude"),
+    longitude: requiredNumber(backendResult, "longitude"),
+    date: requiredString(backendResult, "date"),
+    inputWindowStart: inputWindowStart ?? undefined,
+    inputWindowEnd: inputWindowEnd ?? undefined,
+    modelVersion,
+    gridResolutionDeg: requiredNumber(
+      backendResult,
+      "gridResolutionDeg",
+      "grid_resolution_deg",
+    ),
+    createdAt: requiredString(backendResult, "createdAt", "created_at"),
+    completedAt: nullableString(backendResult, "completedAt", "completed_at"),
+    errorMessage: nullableString(backendResult, "errorMessage", "error_message"),
+    surfaceObservations,
     predictions,
 
     depths: predictions.map(
@@ -75,10 +394,9 @@ export async function reconstructOcean(
     ),
 
     uncertainty: predictions.map(
-      (prediction) => prediction.uncertaintyC ?? 0
+      (prediction) => prediction.uncertaintyC
     ),
 
-    model_version:
-      backendResult.modelVersion ?? "oceanembed-v1.0",
+    model_version: modelVersion,
   };
 }

@@ -1,8 +1,13 @@
 package com.oceanembed.backend.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 public class MlDepthPrediction {
+    @JsonProperty("depth_m")
     private Integer depth_m;
+    @JsonProperty("temperature_c")
     private Double temperature_c;
+    @JsonProperty("uncertainty_c")
     private Double uncertainty_c;
 
     public Integer getDepth_m() { return depth_m; }

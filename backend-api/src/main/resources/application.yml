@@ -24,6 +24,9 @@ ml-service:
   connect-timeout-ms: 3000
   read-timeout-ms: 10000
 
+live:
+  status-file: ${LIVE_STATUS_FILE:../data/processed/live/live_status.json}
+
 logging:
   level:
     com.oceanembed.backend: INFO

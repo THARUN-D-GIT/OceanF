@@ -1,4 +1,4 @@
-﻿package com.oceanembed.backend.dto;
+package com.oceanembed.backend.dto;
 
 import jakarta.validation.constraints.*;
 import java.time.LocalDate;

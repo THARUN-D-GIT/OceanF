@@ -59,13 +59,22 @@ class DepthPrediction(BaseModel):
     uncertainty_c: Optional[float] = None
 
 
+class SurfaceObservation(BaseModel):
+    variable: str
+    value: Optional[float] = None
+    unit: str
+
+
 class PredictionResponse(BaseModel):
     latitude: float
     longitude: float
     date: date
+    input_window_start: date
+    input_window_end: date
     model_version: str
     grid_resolution_deg: float = 0.25
     predictions: List[DepthPrediction]
+    surface_observations: List[SurfaceObservation]
 
 
 class HealthResponse(BaseModel):
