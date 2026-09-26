@@ -1,53 +1,27 @@
-import { useMemo, useState } from "react";
-import {
-  CircleMarker,
-  MapContainer,
-  Popup,
-  TileLayer,
-  useMap,
-} from "react-leaflet";
+import { useEffect, useMemo, useState } from "react";
 import Plot from "react-plotly.js";
 
 import "./App.css";
+import NorthIndianOceanMap from "./components/NorthIndianOceanMap";
 import SurfaceInputs from "./components/SurfaceInputs";
-import { OceanEmbedError, reconstructOcean } from "./api";
+import { fetchLiveStatus, OceanEmbedError, reconstructOcean } from "./api";
 import { DEPTHS } from "./types";
 import type { Region } from "./types";
 
 type DemoStage = "idle" | "surface" | "embedding" | "subsurface" | "complete";
 
-interface Point {
-  lat: number;
-  lon: number;
-}
-
 const REGION_CONFIG: Record<
   Region,
-  {
-    center: [number, number];
-    latMin: number;
-    latMax: number;
-    lonMin: number;
-    lonMax: number;
-  }
+  { center: [number, number] }
 > = {
   "Arabian Sea": {
     center: [15.5, 65.5],
-    latMin: 8,
-    latMax: 24,
-    lonMin: 52,
-    lonMax: 76,
   },
   "Bay of Bengal": {
     center: [15.5, 88],
-    latMin: 8,
-    latMax: 24,
-    lonMin: 80,
-    lonMax: 98,
   },
 };
 
-const DEFAULT_DATE = "2026-09-20";
 const DOMAIN = {
   latitudeMin: 5,
   latitudeMax: 30,
@@ -55,21 +29,39 @@ const DOMAIN = {
   longitudeMax: 105,
 } as const;
 
-type ReconstructionError =
-  | { kind: "domain"; message: string }
-  | { kind: "unsupported-location" }
-  | { kind: "request-failed" };
+type ReconstructionError = "unsupported-location" | "request-failed";
+type ValidationState =
+  | "CHECKING"
+  | "LIVE_STATUS_UNAVAILABLE"
+  | "INCOMPLETE_INPUTS"
+  | "OUTSIDE_DOMAIN"
+  | "DATE_UNAVAILABLE"
+  | "INCOMPLETE_OBSERVATIONS"
+  | "LOCATION_NOT_SUPPORTED"
+  | "REQUEST_FAILED"
+  | "VALID";
+
+interface SurfaceCoverage {
+  observations: NonNullable<
+    Awaited<ReturnType<typeof reconstructOcean>>["surfaceObservations"]
+  >;
+  count: number;
+}
+
+const REQUIRED_SURFACE_VARIABLES = [
+  "SST",
+  "SSS",
+  "SLA",
+  "U Current",
+  "V Current",
+  "U Wind",
+  "V Wind",
+] as const;
 
 const UNSUPPORTED_LOCATION_MESSAGE =
   "This location is within the North Indian Ocean domain, but it cannot currently be represented by the model's prediction tile.";
 const UNSUPPORTED_LOCATION_HELPER =
   "Please select a nearby location inside the supported reconstruction area.";
-
-function MapRecenter({ center }: { center: [number, number] }) {
-  const map = useMap();
-  map.setView(center, 5);
-  return null;
-}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -78,6 +70,47 @@ function sleep(ms: number) {
 function formatCoordinate(value: number, axis: "lat" | "lon") {
   const sign = axis === "lat" ? (value >= 0 ? "N" : "S") : value >= 0 ? "E" : "W";
   return `${Math.abs(value).toFixed(2)}°${sign}`;
+}
+
+function parseCoordinate(value: string): number | null {
+  if (!value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeCoordinateInput(value: string): string {
+  const parsed = parseCoordinate(value);
+  return parsed === null ? value : String(parsed);
+}
+
+function requestKey(latitude: number, longitude: number, date: string) {
+  return `${latitude}|${longitude}|${date}`;
+}
+
+function countSurfaceVariables(
+  observations: SurfaceCoverage["observations"] | undefined,
+) {
+  if (!observations) return 0;
+  const values = new Map(
+    observations.map((observation) => [observation.variable, observation.value]),
+  );
+  return REQUIRED_SURFACE_VARIABLES.filter((variable) => {
+    const value = values.get(variable);
+    return typeof value === "number" && Number.isFinite(value);
+  }).length;
+}
+
+function formatLiveDate(isoDate: string) {
+  const parsedDate = new Date(`${isoDate}T00:00:00Z`);
+  if (Number.isNaN(parsedDate.getTime())) return isoDate;
+  return parsedDate
+    .toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      timeZone: "UTC",
+    })
+    .toUpperCase();
 }
 
 function shiftIsoDate(isoDate: string, days: number) {
@@ -90,32 +123,104 @@ function shiftIsoDate(isoDate: string, days: number) {
 
 function App() {
   const [region, setRegion] = useState<Region>("Arabian Sea");
-  const [date, setDate] = useState(DEFAULT_DATE);
+  const [date, setDate] = useState("");
   const [depth, setDepth] = useState<number>(100);
-  const [latitude, setLatitude] = useState(15.5);
-  const [longitude, setLongitude] = useState(65.5);
+  const [latitudeInput, setLatitudeInput] = useState("15.5");
+  const [longitudeInput, setLongitudeInput] = useState("65.5");
+  const [liveStatus, setLiveStatus] = useState<Awaited<ReturnType<typeof fetchLiveStatus>> | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [statusError, setStatusError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ReconstructionError | null>(null);
+  const [surfaceCoverageByRequest, setSurfaceCoverageByRequest] =
+    useState<Record<string, SurfaceCoverage>>({});
   const [demoStage, setDemoStage] = useState<DemoStage>("idle");
   const [apiResult, setApiResult] = useState<Awaited<ReturnType<typeof reconstructOcean>> | null>(null);
 
-  const config = REGION_CONFIG[region];
-  const selectedPoint: Point = { lat: latitude, lon: longitude };
+  const selectedPoint = {
+    lat: parseCoordinate(latitudeInput),
+    lon: parseCoordinate(longitudeInput),
+  };
+  const latestUsableDate = liveStatus?.latestUsableDate ?? null;
+  const readyVariableCount = liveStatus?.variablesReadyCount ?? 0;
+  const requiredVariableCount = liveStatus?.requiredVariablesCount ?? 7;
+  const selectedCoverage = selectedPoint.lat !== null
+    && selectedPoint.lon !== null
+    && date
+    ? surfaceCoverageByRequest[
+        requestKey(selectedPoint.lat, selectedPoint.lon, date)
+      ]
+    : undefined;
+  const coordinateRangeMessage = selectedPoint.lat !== null
+    && (selectedPoint.lat < DOMAIN.latitudeMin
+      || selectedPoint.lat > DOMAIN.latitudeMax)
+    ? "Latitude must be between 5°N and 30°N."
+    : selectedPoint.lon !== null
+      && (selectedPoint.lon < DOMAIN.longitudeMin
+        || selectedPoint.lon > DOMAIN.longitudeMax)
+      ? "Longitude must be between 45°E and 105°E."
+      : "Select a coordinate inside 5°N–30°N and 45°E–105°E.";
 
-  const mapPoints = useMemo(() => {
-    const points: Point[] = [];
+  let validationState: ValidationState;
+  if (selectedPoint.lat === null || selectedPoint.lon === null) {
+    validationState = "INCOMPLETE_INPUTS";
+  } else if (
+    selectedPoint.lat < DOMAIN.latitudeMin
+    || selectedPoint.lat > DOMAIN.latitudeMax
+    || selectedPoint.lon < DOMAIN.longitudeMin
+    || selectedPoint.lon > DOMAIN.longitudeMax
+  ) {
+    validationState = "OUTSIDE_DOMAIN";
+  } else if (!date) {
+    validationState = "INCOMPLETE_INPUTS";
+  } else if (statusLoading) {
+    validationState = "CHECKING";
+  } else if (statusError) {
+    validationState = "LIVE_STATUS_UNAVAILABLE";
+  } else if (
+    !liveStatus?.ready
+    || !latestUsableDate
+    || date > latestUsableDate
+  ) {
+    validationState = "DATE_UNAVAILABLE";
+  } else if (selectedCoverage && selectedCoverage.count < REQUIRED_SURFACE_VARIABLES.length) {
+    validationState = "INCOMPLETE_OBSERVATIONS";
+  } else if (error === "unsupported-location") {
+    validationState = "LOCATION_NOT_SUPPORTED";
+  } else if (error === "request-failed") {
+    validationState = "REQUEST_FAILED";
+  } else {
+    validationState = "VALID";
+  }
 
-    for (let lat = config.latMin; lat <= config.latMax; lat += 2) {
-      for (let lon = config.lonMin; lon <= config.lonMax; lon += 2) {
-        points.push({ lat, lon });
-      }
-    }
+  const reconstructionAllowed = validationState === "VALID" && !loading;
 
-    return points;
-  }, [config]);
-
-  const selectedPrediction =
-    apiResult?.predictions.find((prediction) => prediction.depthM === depth) ?? null;
+  useEffect(() => {
+    let cancelled = false;
+    fetchLiveStatus()
+      .then((status) => {
+        if (cancelled) return;
+        setLiveStatus(status);
+        setStatusError(false);
+        if (status.latestUsableDate) {
+          setDate(status.latestUsableDate);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setStatusError(true);
+          setLiveStatus(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setStatusLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const profileDepths = apiResult?.predictions.map((prediction) => prediction.depthM) ?? DEPTHS;
   const profileTemperatures = apiResult?.predictions.map((prediction) => prediction.temperatureC) ?? [];
@@ -162,7 +267,7 @@ function App() {
   function stageLabel(stage: DemoStage) {
     switch (stage) {
       case "surface":
-        return "Preparing 7-day observation window";
+        return "Preparing retrospective 7-day input window";
       case "embedding":
         return "Running OceanEmbed-CNN";
       case "subsurface":
@@ -177,24 +282,21 @@ function App() {
   function applyRegion(regionValue: Region) {
     const nextConfig = REGION_CONFIG[regionValue];
     setRegion(regionValue);
-    setLatitude(nextConfig.center[0]);
-    setLongitude(nextConfig.center[1]);
+    setLatitudeInput(String(nextConfig.center[0]));
+    setLongitudeInput(String(nextConfig.center[1]));
     setApiResult(null);
     setError(null);
     setDemoStage("idle");
   }
 
   async function runReconstruction() {
-    if (selectedPoint.lat < DOMAIN.latitudeMin || selectedPoint.lat > DOMAIN.latitudeMax) {
+    if (
+      !reconstructionAllowed
+      || selectedPoint.lat === null
+      || selectedPoint.lon === null
+      || (selectedCoverage && selectedCoverage.count < REQUIRED_SURFACE_VARIABLES.length)
+    ) {
       setApiResult(null);
-      setError({ kind: "domain", message: "Latitude must be between 5°N and 30°N." });
-      setDemoStage("idle");
-      return;
-    }
-
-    if (selectedPoint.lon < DOMAIN.longitudeMin || selectedPoint.lon > DOMAIN.longitudeMax) {
-      setApiResult(null);
-      setError({ kind: "domain", message: "Longitude must be between 45°E and 105°E." });
       setDemoStage("idle");
       return;
     }
@@ -209,6 +311,11 @@ function App() {
       setDemoStage("embedding");
       await sleep(450);
 
+      const coverageKey = requestKey(
+        selectedPoint.lat,
+        selectedPoint.lon,
+        date,
+      );
       const result = await reconstructOcean({
         latitude: selectedPoint.lat,
         longitude: selectedPoint.lon,
@@ -216,14 +323,32 @@ function App() {
         depths: [...DEPTHS],
       });
 
+      const observations = result.surfaceObservations ?? [];
+      const coverage: SurfaceCoverage = {
+        observations,
+        count: countSurfaceVariables(observations),
+      };
+      setSurfaceCoverageByRequest((current) => ({
+        ...current,
+        [coverageKey]: coverage,
+      }));
+      if (coverage.count < REQUIRED_SURFACE_VARIABLES.length) {
+        setApiResult(null);
+        setError(null);
+        setDemoStage("idle");
+        return;
+      }
+
       setApiResult(result);
       setDemoStage("subsurface");
       await sleep(450);
       setDemoStage("complete");
     } catch (err) {
-      setError({
-        kind: err instanceof OceanEmbedError ? err.kind : "request-failed",
-      });
+      setError(
+        err instanceof OceanEmbedError
+          ? err.kind
+          : "request-failed",
+      );
       setDemoStage("idle");
     } finally {
       setLoading(false);
@@ -254,15 +379,27 @@ function App() {
         <div className="context-bar">
           <div className="context-item">
             <span className="context-label">LATEST USABLE DATE</span>
-            <strong>2026-09-20</strong>
+            <strong>
+              {latestUsableDate
+                ? formatLiveDate(latestUsableDate)
+                : statusLoading ? "Checking…" : "Unavailable"}
+            </strong>
           </div>
           <div className="context-item">
-            <span className="context-label">INPUT WINDOW</span>
-            <strong>2026-09-14 → 2026-09-20</strong>
+            <span className="context-label">RETROSPECTIVE 7-DAY INPUT WINDOW</span>
+            <strong>
+              {liveStatus?.inputWindowStart && liveStatus.inputWindowEnd
+                ? `${formatLiveDate(liveStatus.inputWindowStart)} → ${formatLiveDate(liveStatus.inputWindowEnd)}`
+                : "Unavailable"}
+            </strong>
           </div>
           <div className="context-item">
-            <span className="context-label">SURFACE VARIABLES</span>
-            <strong>7</strong>
+            <span className="context-label">VARIABLES READY</span>
+            <strong>
+              {liveStatus
+                ? `${readyVariableCount} / ${requiredVariableCount}${liveStatus.variablesReady.length > 0 ? ` · ${liveStatus.variablesReady.join(", ")}` : ""}`
+                : statusLoading ? "Checking…" : "Unavailable"}
+            </strong>
           </div>
           <div className="context-item">
             <span className="context-label">GRID</span>
@@ -274,7 +411,18 @@ function App() {
           </div>
           <div className="context-item status-item">
             <span className="context-label">DATA STATUS</span>
-            <strong>LIVE / READY</strong>
+            <strong>
+              {statusLoading
+                ? "CHECKING"
+                : statusError
+                  ? "UNAVAILABLE"
+                  : liveStatus?.ready
+                    ? "LIVE / READY"
+                    : "NOT READY"}
+            </strong>
+            {liveStatus?.lastChecked && (
+              <small className="context-meta">Last checked: {liveStatus.lastChecked}</small>
+            )}
           </div>
         </div>
 
@@ -306,18 +454,18 @@ function App() {
                 <input
                   id="latitude"
                   type="number"
-                  min={5}
-                  max={30}
-                  step="0.01"
-                  value={latitude}
+                  min={DOMAIN.latitudeMin}
+                  max={DOMAIN.latitudeMax}
+                  step="any"
+                  autoComplete="off"
+                  value={latitudeInput}
                   onChange={(event) => {
-                    const next = Number(event.target.value);
-                    if (Number.isNaN(next)) return;
-                    setLatitude(next);
+                    setLatitudeInput(event.target.value);
                     setApiResult(null);
                     setError(null);
                     setDemoStage("idle");
                   }}
+                  onBlur={() => setLatitudeInput((value) => normalizeCoordinateInput(value))}
                 />
               </div>
 
@@ -326,18 +474,18 @@ function App() {
                 <input
                   id="longitude"
                   type="number"
-                  min={45}
-                  max={105}
-                  step="0.01"
-                  value={longitude}
+                  min={DOMAIN.longitudeMin}
+                  max={DOMAIN.longitudeMax}
+                  step="any"
+                  autoComplete="off"
+                  value={longitudeInput}
                   onChange={(event) => {
-                    const next = Number(event.target.value);
-                    if (Number.isNaN(next)) return;
-                    setLongitude(next);
+                    setLongitudeInput(event.target.value);
                     setApiResult(null);
                     setError(null);
                     setDemoStage("idle");
                   }}
+                  onBlur={() => setLongitudeInput((value) => normalizeCoordinateInput(value))}
                 />
               </div>
 
@@ -346,6 +494,7 @@ function App() {
                 <input
                   id="date"
                   type="date"
+                  max={latestUsableDate ?? undefined}
                   value={date}
                   onChange={(event) => {
                     setDate(event.target.value);
@@ -369,81 +518,29 @@ function App() {
                 </select>
               </div>
 
-              <button className="reconstruct-button" type="button" onClick={runReconstruction} disabled={loading}>
+              <button
+                className="reconstruct-button"
+                type="button"
+                onClick={runReconstruction}
+                disabled={!reconstructionAllowed}
+              >
                 {loading ? "RUNNING..." : "RUN RECONSTRUCTION"}
               </button>
             </div>
 
             <div className="location-panel">
               <div className="map-shell">
-                <MapContainer center={config.center} zoom={5} scrollWheelZoom className="ocean-map">
-                  <MapRecenter center={config.center} />
-                  <TileLayer
-                    attribution="&copy; OpenStreetMap contributors"
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                  />
-
-                  {mapPoints.map((point, index) => {
-                    const isSelected =
-                      Math.abs(point.lat - selectedPoint.lat) < 0.001 &&
-                      Math.abs(point.lon - selectedPoint.lon) < 0.001;
-
-                    return (
-                      <CircleMarker
-                        key={`${point.lat}-${point.lon}-${index}`}
-                        center={[point.lat, point.lon]}
-                        radius={isSelected ? 8 : 4}
-                        pathOptions={{
-                          color: isSelected ? "#dfeef4" : "#58c2ef",
-                          fillColor: isSelected ? "#dfeef4" : "#58c2ef",
-                          fillOpacity: isSelected ? 1 : 0.4,
-                          weight: isSelected ? 3 : 1,
-                        }}
-                        eventHandlers={{
-                          click: () => {
-                            setLatitude(point.lat);
-                            setLongitude(point.lon);
-                            setApiResult(null);
-                            setError(null);
-                            setDemoStage("idle");
-                          },
-                        }}
-                      >
-                        <Popup>
-                          <div className="map-popup">
-                            <strong>OceanEmbed grid point</strong>
-                            <span>{formatCoordinate(point.lat, "lat")}</span>
-                            <span>{formatCoordinate(point.lon, "lon")}</span>
-                          </div>
-                        </Popup>
-                      </CircleMarker>
-                    );
-                  })}
-
-                  <CircleMarker
-                    center={[selectedPoint.lat, selectedPoint.lon]}
-                    radius={12}
-                    pathOptions={{
-                      color: "#dfeef4",
-                      fillColor: "#ffffff",
-                      fillOpacity: 1,
-                      weight: 3,
-                    }}
-                  >
-                    <Popup>
-                      <div className="map-popup">
-                        <strong>Selected location</strong>
-                        <span>{formatCoordinate(selectedPoint.lat, "lat")}</span>
-                        <span>{formatCoordinate(selectedPoint.lon, "lon")}</span>
-                        {selectedPrediction ? (
-                          <span>{selectedPrediction.temperatureC.toFixed(2)} °C at {depth} m</span>
-                        ) : (
-                          <span>Run reconstruction to obtain temperature.</span>
-                        )}
-                      </div>
-                    </Popup>
-                  </CircleMarker>
-                </MapContainer>
+                <NorthIndianOceanMap
+                  latitude={selectedPoint.lat}
+                  longitude={selectedPoint.lon}
+                  onSelect={(nextLatitude, nextLongitude) => {
+                    setLatitudeInput(String(nextLatitude));
+                    setLongitudeInput(String(nextLongitude));
+                    setApiResult(null);
+                    setError(null);
+                    setDemoStage("idle");
+                  }}
+                />
 
                 <div className="map-badge">{region}</div>
               </div>
@@ -451,11 +548,15 @@ function App() {
               <div className="location-summary">
                 <div>
                   <div className="label-small">SELECTED LOCATION</div>
-                  <div className="location-value">{formatCoordinate(selectedPoint.lat, "lat")} / {formatCoordinate(selectedPoint.lon, "lon")}</div>
+                  <div className="location-value">
+                    {selectedPoint.lat !== null && selectedPoint.lon !== null
+                      ? `${formatCoordinate(selectedPoint.lat, "lat")} / ${formatCoordinate(selectedPoint.lon, "lon")}`
+                      : "Enter latitude and longitude"}
+                  </div>
                 </div>
                 <div>
-                  <div className="label-small">OBSERVATION WINDOW</div>
-                  <div className="location-value">{date}</div>
+                  <div className="label-small">TARGET DATE</div>
+                  <div className="location-value">{date || "Select a date"}</div>
                 </div>
               </div>
             </div>
@@ -465,10 +566,10 @@ function App() {
             {[
               { id: "surface", label: "SATELLITE / SURFACE OBSERVATIONS" },
               { id: "quality", label: "QUALITY CONTROL + HARMONIZATION" },
-              { id: "window", label: "7-DAY FEATURE WINDOW" },
+              { id: "window", label: "RETROSPECTIVE 7-DAY INPUT WINDOW" },
               { id: "model", label: "OCEANEMBED-CNN" },
               { id: "output", label: "15-DEPTH RECONSTRUCTION" },
-              { id: "validation", label: "GLORYS / ARGO VALIDATION" },
+              { id: "validation", label: "GLORYS TEST COMPLETE · ARGO PLANNED" },
             ].map((step, index) => {
               const active =
                 (demoStage === "surface" && index === 0) ||
@@ -491,53 +592,84 @@ function App() {
             })}
           </div>
 
-          <div className={`status-banner ${demoStage === "complete" ? "success" : ""}`}>
-            <div className="status-banner-icon">{demoStage === "complete" ? "✓" : "◉"}</div>
+          <div
+            className={`status-banner ${
+              validationState === "VALID"
+                ? demoStage === "complete" ? "success" : ""
+                : validationState === "REQUEST_FAILED"
+                    || validationState === "LOCATION_NOT_SUPPORTED"
+                  ? "error-banner"
+                  : "warning-banner"
+            }`}
+            role="status"
+          >
+            <div className="status-banner-icon">
+              {validationState === "VALID" && demoStage === "complete" ? "✓" : "◉"}
+            </div>
             <div>
-              <div className="status-banner-title">{stageLabel(demoStage)}</div>
+              <div className="status-banner-title">
+                {loading
+                  ? stageLabel(demoStage)
+                  : validationState === "CHECKING"
+                    ? "CHECKING LIVE DATA"
+                    : validationState === "LIVE_STATUS_UNAVAILABLE"
+                      ? "LIVE DATA STATUS UNAVAILABLE"
+                      : validationState === "INCOMPLETE_INPUTS"
+                        ? "INCOMPLETE INPUTS"
+                        : validationState === "OUTSIDE_DOMAIN"
+                          ? "OUTSIDE SUPPORTED DOMAIN"
+                          : validationState === "DATE_UNAVAILABLE"
+                            ? "DATA NOT READY"
+                            : validationState === "INCOMPLETE_OBSERVATIONS"
+                              ? "RECONSTRUCTION UNAVAILABLE"
+                              : validationState === "LOCATION_NOT_SUPPORTED"
+                                ? "LOCATION NOT SUPPORTED"
+                                : validationState === "REQUEST_FAILED"
+                                  ? "RECONSTRUCTION UNAVAILABLE"
+                                  : demoStage === "complete"
+                                    ? "COMPLETE"
+                                    : "READY TO RUN RECONSTRUCTION"}
+              </div>
               <div className="status-banner-copy">
                 {loading
-                  ? "Processing live OceanEmbed inference."
-                  : demoStage === "complete"
-                    ? "REAL BACKEND RESULT AVAILABLE"
-                    : "Select a location and run the reconstruction."}
+                  ? "Processing OceanEmbed inference using the retrospective 7-day input window."
+                  : validationState === "CHECKING"
+                    ? "Checking the latest usable date and available input variables."
+                    : validationState === "LIVE_STATUS_UNAVAILABLE"
+                      ? "Live data availability could not be checked. Please try again later."
+                      : validationState === "INCOMPLETE_INPUTS"
+                        ? "Enter a numeric latitude, longitude, and target date."
+                        : validationState === "OUTSIDE_DOMAIN"
+                          ? coordinateRangeMessage
+                          : validationState === "DATE_UNAVAILABLE"
+                            ? `Latest usable date: ${latestUsableDate ? formatLiveDate(latestUsableDate) : "unavailable"}. The selected date does not have a complete retrospective input window.`
+                            : validationState === "INCOMPLETE_OBSERVATIONS"
+                              ? "Required surface observations are incomplete."
+                              : validationState === "LOCATION_NOT_SUPPORTED"
+                                ? UNSUPPORTED_LOCATION_MESSAGE
+                                : validationState === "REQUEST_FAILED"
+                                  ? "The reconstruction could not be completed. Please try again."
+                                  : demoStage === "complete"
+                                    ? "REAL BACKEND RESULT AVAILABLE"
+                                    : "Location is inside the supported domain and the selected date is available."}
               </div>
+              {validationState === "LOCATION_NOT_SUPPORTED" && (
+                <div className="status-banner-copy">{UNSUPPORTED_LOCATION_HELPER}</div>
+              )}
             </div>
           </div>
 
-          {error && (
-            <div className={`status-banner ${error.kind === "unsupported-location" ? "warning-banner" : "error-banner"}`}>
-              <div className="status-banner-icon">{error.kind === "unsupported-location" ? "!" : "×"}</div>
-              <div>
-                <div className="status-banner-title">
-                  {error.kind === "unsupported-location"
-                    ? "LOCATION NOT SUPPORTED"
-                    : error.kind === "domain"
-                      ? "CHECK LOCATION"
-                      : "RECONSTRUCTION UNAVAILABLE"}
-                </div>
-                <div className="status-banner-copy">
-                  {error.kind === "unsupported-location"
-                    ? UNSUPPORTED_LOCATION_MESSAGE
-                    : error.kind === "domain"
-                      ? error.message
-                      : "The reconstruction could not be completed. Please try again."}
-                </div>
-                {error.kind === "unsupported-location" && (
-                  <div className="status-banner-copy">{UNSUPPORTED_LOCATION_HELPER}</div>
-                )}
-              </div>
-            </div>
-          )}
         </section>
 
         <SurfaceInputs
-          observations={apiResult?.surfaceObservations}
+          observations={selectedCoverage?.observations ?? apiResult?.surfaceObservations}
+          coverageCount={selectedCoverage?.count ?? 0}
+          coverageKnown={selectedCoverage !== undefined}
           targetDate={apiResult?.date ?? date}
           inputWindowStart={apiResult?.inputWindowStart ?? shiftIsoDate(date, -6)}
           inputWindowEnd={apiResult?.inputWindowEnd ?? date}
-          snappedLatitude={apiResult?.latitude}
-          snappedLongitude={apiResult?.longitude}
+          snappedLatitude={apiResult?.latitude ?? selectedPoint.lat ?? undefined}
+          snappedLongitude={apiResult?.longitude ?? selectedPoint.lon ?? undefined}
         />
 
         <section className="analysis-grid">
@@ -738,7 +870,7 @@ function App() {
 
             <div className="model-grid">
               <div className="model-row"><span>MODEL</span><strong>OceanEmbed-CNN</strong></div>
-              <div className="model-row"><span>EXPERIMENT</span><strong>E2 — 7-day retrospective</strong></div>
+              <div className="model-row"><span>EXPERIMENT</span><strong>E2 — Retrospective 7-day input window</strong></div>
               <div className="model-row"><span>INPUT</span><strong>49 channels</strong></div>
               <div className="model-row"><span>LATENT</span><strong>128 channels</strong></div>
               <div className="model-row"><span>OUTPUT</span><strong>15 depth levels</strong></div>
@@ -749,14 +881,14 @@ function App() {
 
             <div className="validation-block">
               <div className="validation-header">GLORYS</div>
-              <p>Held-out evaluation</p>
-              <div className="validation-text">Evaluation metrics available in project validation reports.</div>
+              <p>Test complete</p>
+              <div className="validation-text">GLORYS held-out test evaluation is complete.</div>
             </div>
 
             <div className="validation-block argostage">
               <div className="validation-header">ARGO</div>
-              <p>Independent observational validation</p>
-              <div className="validation-text">STATUS: INTEGRATION STAGE</div>
+              <p>Planned</p>
+              <div className="validation-text">Independent ARGO observational validation is planned.</div>
             </div>
           </div>
         </section>

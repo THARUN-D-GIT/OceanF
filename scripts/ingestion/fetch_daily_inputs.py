@@ -345,6 +345,7 @@ def expected_output_path(
 def run_download(
     request: DownloadRequest,
     output_directory: Path,
+    force: bool = False,
 ) -> Path:
 
     output_directory.mkdir(
@@ -357,7 +358,7 @@ def run_download(
         request,
     )
 
-    if output_path.exists():
+    if output_path.exists() and not force:
 
         print(
             f"[SKIP] {request.name}: "
@@ -365,6 +366,13 @@ def run_download(
         )
 
         return output_path
+
+    if output_path.exists() and force:
+        print(
+            f"[RETRY] {request.name}: replacing existing "
+            f"{output_path.name}"
+        )
+        output_path.unlink()
 
     command = build_subset_command(
         request,
@@ -540,6 +548,14 @@ def main() -> None:
             "Target date in YYYY-MM-DD format."
         ),
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Replace existing source files so incomplete or delayed "
+            "downloads can be retried."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -587,6 +603,7 @@ def main() -> None:
         path = run_download(
             request,
             output_directory,
+            force=args.force,
         )
 
         downloaded_files.append(

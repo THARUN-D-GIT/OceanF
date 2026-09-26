@@ -40,6 +40,8 @@ const SURFACE_VARIABLES = [
 
 interface SurfaceInputsProps {
   observations?: SurfaceObservation[];
+  coverageCount: number;
+  coverageKnown: boolean;
   targetDate: string;
   inputWindowStart: string;
   inputWindowEnd: string;
@@ -49,6 +51,8 @@ interface SurfaceInputsProps {
 
 export default function SurfaceInputs({
   observations,
+  coverageCount,
+  coverageKnown,
   targetDate,
   inputWindowStart,
   inputWindowEnd,
@@ -65,6 +69,12 @@ export default function SurfaceInputs({
     && Number.isFinite(snappedLongitude)
       ? `${Math.abs(snappedLatitude).toFixed(2)}°${snappedLatitude >= 0 ? "N" : "S"} / ${Math.abs(snappedLongitude).toFixed(2)}°${snappedLongitude >= 0 ? "E" : "W"}`
       : null;
+  const displayUnit = (variable: (typeof SURFACE_VARIABLES)[number]) => {
+    if (variable.name === "SST") {
+      return "°C";
+    }
+    return observationByVariable.get(variable.name)?.unit ?? variable.unit;
+  };
 
   return (
     <section className="card surfaceInputs">
@@ -79,8 +89,9 @@ export default function SurfaceInputs({
           </h2>
         </div>
 
-        <div className="surfaceBadge">
-          7 VARIABLES
+        <div className="surfaceCoverage">
+          <span>SURFACE INPUT COVERAGE</span>
+          <strong>{coverageKnown ? `${coverageCount} / 7 VARIABLES` : "— / 7 VARIABLES"}</strong>
         </div>
       </div>
 
@@ -108,7 +119,7 @@ export default function SurfaceInputs({
               </div>
 
               <div className="surfaceInputUnit">
-                {observation?.unit ?? variable.unit}
+                {displayUnit(variable)}
               </div>
             </div>
           );
@@ -116,7 +127,7 @@ export default function SurfaceInputs({
       </div>
 
       <div className="controlNote">
-        Values shown are for {targetDate}, the final day of the 7-day model input window:
+        Values shown are for {targetDate}, the final day of the retrospective 7-day input window:
         {" "}{inputWindowStart} → {inputWindowEnd}. Cards show that final day only, at the snapped 0.25° grid location.
         {snappedLocation && <> Snapped observation location: {snappedLocation}.</>}
       </div>

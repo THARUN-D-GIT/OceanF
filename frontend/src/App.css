@@ -207,6 +207,14 @@ button {
   color: #f0fbff;
 }
 
+.context-meta {
+  display: block;
+  margin-top: 4px;
+  color: #a3c5d8;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .status-item strong {
   color: #7fe3d0;
 }
@@ -490,8 +498,8 @@ button {
 }
 
 .reconstruct-button:disabled {
-  cursor: wait;
-  opacity: 0.75;
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .reconstruct-button > * {
@@ -515,7 +523,8 @@ button {
 .map-shell {
   position: relative;
   overflow: hidden;
-  min-height: 360px;
+  min-height: 260px;
+  aspect-ratio: 16 / 9;
   border: 1px solid rgba(124, 170, 196, 0.2);
   border-radius: 16px;
   background: rgba(5, 17, 24, 0.68);
@@ -523,8 +532,140 @@ button {
 }
 
 .ocean-map {
+  display: block;
   width: 100%;
-  height: 360px;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.map-title {
+  fill: #a9d7e7;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 1.6px;
+}
+
+.map-region-name {
+  fill: rgba(225, 244, 249, 0.78);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 1.15px;
+}
+
+.map-domain-meta {
+  fill: rgba(174, 211, 225, 0.72);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.85px;
+}
+
+.map-current-contour {
+  fill: none;
+  stroke: rgba(106, 190, 208, 0.09);
+  stroke-width: 18;
+  filter: blur(9px);
+  pointer-events: none;
+}
+
+.map-current-contour.secondary {
+  stroke: rgba(87, 166, 188, 0.07);
+  stroke-width: 24;
+}
+
+.map-grid-line {
+  stroke: rgba(156, 209, 231, 0.035);
+  stroke-width: 0.45;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.map-grid-line.guide {
+  stroke: rgba(174, 226, 242, 0.22);
+  stroke-width: 0.8;
+}
+
+.map-land {
+  fill: url("#oceanMapLand");
+  stroke: rgba(179, 207, 186, 0.7);
+  stroke-width: 1.1;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.map-land.island {
+  stroke-width: 0.7;
+}
+
+.map-domain-border {
+  fill: none;
+  stroke: rgba(119, 221, 229, 0.72);
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+  filter: drop-shadow(0 0 5px rgba(76, 208, 225, 0.2));
+}
+
+.map-axis-label {
+  fill: rgba(185, 216, 227, 0.72);
+  font-size: 8px;
+  font-weight: 550;
+}
+
+.map-water-label {
+  fill: rgba(191, 230, 238, 0.74);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 1.25px;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.map-land-label {
+  fill: rgba(230, 240, 221, 0.58);
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 1.5px;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.map-selected-glow {
+  fill: url("#oceanMapProbeGlow");
+  pointer-events: none;
+}
+
+.map-selected-crosshair {
+  stroke: rgba(153, 246, 255, 0.9);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.map-selected-halo {
+  fill: rgba(121, 236, 249, 0.22);
+  stroke: rgba(197, 251, 255, 0.95);
+  stroke-width: 1.1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.map-selected-point {
+  fill: #f4ffff;
+  stroke: #54e0ee;
+  stroke-width: 1.8;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.map-selected-label {
+  fill: #f3fdff;
+  font-size: 9px;
+  font-weight: 750;
+  paint-order: stroke;
+  stroke: #082535;
+  stroke-linejoin: round;
+  stroke-width: 3.5px;
+  pointer-events: none;
 }
 
 .map-badge {
@@ -541,6 +682,40 @@ button {
   backdrop-filter: blur(8px);
 }
 
+.surfaceCoverage {
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+  padding: 8px 11px;
+  border: 1px solid rgba(140, 205, 224, 0.2);
+  border-radius: 10px;
+  background: rgba(8, 34, 47, 0.45);
+  text-align: right;
+}
+
+.surfaceCoverage span {
+  color: var(--muted, #8da8b7);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+}
+
+.surfaceCoverage strong {
+  color: #d8f4f7;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+}
+
+@media (max-width: 520px) {
+  .map-shell {
+    min-height: 220px;
+    aspect-ratio: 1.35 / 1;
+  }
+
+  .surfaceCoverage {
+    max-width: 150px;
+  }
+}
 .location-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

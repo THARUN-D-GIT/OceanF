@@ -52,6 +52,14 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Target date in YYYY-MM-DD format.",
     )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help=(
+            "Optional output path. Use a staging path when "
+            "the caller will validate before publishing."
+        ),
+    )
 
     return parser.parse_args()
 
@@ -631,7 +639,7 @@ def main() -> None:
         / target_date
     )
 
-    output_path = (
+    output_path = args.output or (
         output_dir
         / f"oceanembed_live_{target_date}.nc"
     )

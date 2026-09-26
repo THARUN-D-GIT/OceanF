@@ -17,6 +17,18 @@ export interface SurfaceObservation {
   unit: string;
 }
 
+export interface LiveStatus {
+  latestUsableDate: string | null;
+  inputWindowStart: string | null;
+  inputWindowEnd: string | null;
+  variablesReady: string[];
+  variablesReadyCount: number;
+  requiredVariablesCount: number;
+  lastChecked: string | null;
+  message: string | null;
+  ready: boolean;
+}
+
 export interface OceanEmbedResponse {
   jobId: number;
   status: string;
@@ -134,6 +146,121 @@ function nullableString(record: JsonRecord, ...names: string[]): string | null {
     throw new OceanEmbedError("request-failed");
   }
   return value;
+}
+
+function readStringList(record: JsonRecord, ...names: string[]): string[] {
+  const value = readField(record, ...names);
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+export async function fetchLiveStatus(): Promise<LiveStatus> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/live/status`);
+  if (!response.ok) {
+    throw new OceanEmbedError("request-failed");
+  }
+
+  let responseBody: unknown;
+  try {
+    responseBody = await response.json();
+  } catch {
+    throw new OceanEmbedError("request-failed");
+  }
+
+  if (!isJsonRecord(responseBody)) {
+    throw new OceanEmbedError("request-failed");
+  }
+
+  const record = isJsonRecord(responseBody.data)
+    ? responseBody.data
+    : responseBody;
+  const variablesReady = readStringList(
+    record,
+    "readyVariables",
+    "ready_variables",
+    "variablesReady",
+    "variables_ready",
+    "surfaceVariablesReady",
+    "surface_variables_ready",
+  );
+  const rawVariablesReady = readField(record, "variablesReady", "variables_ready");
+  const legacyCount = readField(
+    record,
+    "variablesReadyCount",
+    "variables_ready_count",
+    "surfaceVariablesReadyCount",
+    "surface_variables_ready_count",
+    "variableCount",
+    "variable_count",
+  );
+  const variablesReadyCount = typeof rawVariablesReady === "number"
+    && Number.isFinite(rawVariablesReady)
+    ? rawVariablesReady
+    : typeof rawVariablesReady === "boolean"
+      ? rawVariablesReady ? 7 : 0
+      : typeof legacyCount === "number" && Number.isFinite(legacyCount)
+        ? legacyCount
+        : variablesReady.length;
+  const rawRequiredVariables = readField(
+    record,
+    "requiredVariables",
+    "required_variables",
+  );
+  const legacyRequiredCount = readField(
+    record,
+    "requiredVariablesCount",
+    "required_variables_count",
+  );
+  const requiredVariablesCount = typeof rawRequiredVariables === "number"
+    && Number.isFinite(rawRequiredVariables)
+    ? rawRequiredVariables
+    : typeof legacyRequiredCount === "number" && Number.isFinite(legacyRequiredCount)
+      ? legacyRequiredCount
+      : 7;
+  const rawReadiness = readField(record, "ready", "dataReady", "data_ready");
+  const rawStatus = readField(record, "status");
+  const readinessFlag = typeof rawReadiness === "boolean"
+    ? rawReadiness
+    : typeof rawVariablesReady === "boolean"
+      ? rawVariablesReady
+      : null;
+  const latestUsableDate = nullableString(
+    record,
+    "latestUsableDate",
+    "latest_usable_date",
+    "latestDate",
+    "latest_date",
+  );
+  const inputWindowStart = nullableString(
+    record,
+    "inputWindowStart",
+    "input_window_start",
+  );
+  const inputWindowEnd = nullableString(
+    record,
+    "inputWindowEnd",
+    "input_window_end",
+  );
+  const ready = readinessFlag
+    ?? (typeof rawStatus === "string"
+      ? rawStatus.toLowerCase() === "ready"
+      : variablesReadyCount >= requiredVariablesCount);
+  const message = nullableString(record, "message");
+  const lastChecked = nullableString(record, "lastChecked", "last_checked");
+
+  return {
+    latestUsableDate,
+    inputWindowStart,
+    inputWindowEnd,
+    variablesReady,
+    variablesReadyCount,
+    requiredVariablesCount,
+    lastChecked,
+    message,
+    ready,
+  };
 }
 
 function normalizePrediction(value: unknown): DepthPrediction {
