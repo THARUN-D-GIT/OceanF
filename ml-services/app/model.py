@@ -434,7 +434,7 @@ class OceanEmbedModel:
 
     def _run_live_window_preparation(self, target_date: date) -> None:
         timeout_seconds = int(
-            os.environ.get("OCEANEMBED_LIVE_PREPARATION_TIMEOUT_SECONDS", "600")
+            os.environ.get("OCEANEMBED_LIVE_PREPARATION_TIMEOUT_SECONDS", "1800")
         )
         command = [
             self._ingestion_python(),

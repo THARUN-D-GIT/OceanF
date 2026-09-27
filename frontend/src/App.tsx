@@ -35,6 +35,162 @@ const DOMAIN = {
   longitudeMax: 105,
 } as const;
 
+const GRID_RESOLUTION_DEG = 0.25;
+const MODEL_OUTPUT_MARGIN_DEG = 4;
+
+const MODEL_DOMAIN = {
+  latitudeMin: DOMAIN.latitudeMin + MODEL_OUTPUT_MARGIN_DEG,
+  latitudeMax: DOMAIN.latitudeMax - MODEL_OUTPUT_MARGIN_DEG,
+  longitudeMin: DOMAIN.longitudeMin + MODEL_OUTPUT_MARGIN_DEG,
+  longitudeMax: DOMAIN.longitudeMax - MODEL_OUTPUT_MARGIN_DEG,
+} as const;
+
+const LANDMASSES_FOR_VALIDATION: ReadonlyArray<ReadonlyArray<readonly [number, number]>> = [
+  [
+    [45, 30],
+    [61, 30],
+    [60, 28],
+    [59, 26],
+    [58, 24],
+    [57, 23],
+    [56, 22],
+    [55, 20],
+    [54, 19],
+    [53, 18],
+    [51, 17],
+    [50, 16],
+    [48, 15],
+    [46, 15.5],
+    [45, 16.5],
+  ],
+  [
+    [68, 30],
+    [74, 30],
+    [75, 28],
+    [74, 26],
+    [72.5, 24.5],
+    [71.5, 23],
+    [70, 22],
+    [68.5, 23],
+    [67.5, 24],
+    [67.5, 22],
+    [68.5, 20],
+    [69.5, 19],
+    [70, 17.5],
+    [71, 16],
+    [72, 14],
+    [72.8, 12],
+    [74, 10],
+    [75, 8.5],
+    [77, 7.5],
+    [78.5, 8.5],
+    [80, 10],
+    [80.8, 12],
+    [81.2, 14],
+    [82.5, 16],
+    [83.5, 18],
+    [85, 19.5],
+    [87, 21],
+    [89, 22],
+    [91, 22],
+    [92, 24],
+    [94, 26],
+    [96, 28],
+    [99, 30],
+  ],
+  [
+    // Myanmar land boundary used by the map.
+    [99.543309, 20.186598],
+    [98.959676, 19.752981],
+    [98.253724, 19.708203],
+    [97.797783, 18.62708],
+    [97.375896, 18.445438],
+    [97.859123, 17.567946],
+    [98.493761, 16.837836],
+    [98.903348, 16.177824],
+    [98.537376, 15.308497],
+    [98.192074, 15.123703],
+    [98.430819, 14.622028],
+    [99.097755, 13.827503],
+    [99.212012, 13.269294],
+    [99.196354, 12.804748],
+    [99.587286, 11.892763],
+    [99.038121, 10.960546],
+    [98.553551, 9.93296],
+    [98.457174, 10.675266],
+    [98.764546, 11.441292],
+    [98.428339, 12.032987],
+    [98.509574, 13.122378],
+    [98.103604, 13.64046],
+    [97.777732, 14.837286],
+    [97.597072, 16.100568],
+    [97.16454, 16.928734],
+    [96.505769, 16.427241],
+    [95.369352, 15.71439],
+    [94.808405, 15.803454],
+    [94.188804, 16.037936],
+    [94.533486, 17.27724],
+    [94.324817, 18.213514],
+    [93.540988, 19.366493],
+    [93.663255, 19.726962],
+    [93.078278, 19.855145],
+    [92.368554, 20.670883],
+    [92.303234, 21.475485],
+    [92.652257, 21.324048],
+    [92.672721, 22.041239],
+    [93.166128, 22.27846],
+    [93.060294, 22.703111],
+    [93.286327, 23.043658],
+    [93.325188, 24.078556],
+    [94.106742, 23.850741],
+    [94.552658, 24.675238],
+    [94.603249, 25.162495],
+    [95.155153, 26.001307],
+    [95.124768, 26.573572],
+    [96.419366, 27.264589],
+    [97.133999, 27.083774],
+    [97.051989, 27.699059],
+    [97.402561, 27.882536],
+    [97.327114, 28.261583],
+    [97.911988, 28.335945],
+    [98.246231, 27.747221],
+    [98.68269, 27.508812],
+    [98.712094, 26.743536],
+    [98.671838, 25.918703],
+    [97.724609, 25.083637],
+    [97.60472, 23.897405],
+    [98.660262, 24.063286],
+    [98.898749, 23.142722],
+    [99.531992, 22.949039],
+    [99.240899, 22.118314],
+    [99.983489, 21.742937],
+    [100.416538, 21.558839],
+    [101.150033, 21.849984],
+    [101.180005, 21.436573],
+    [100.329101, 20.786122],
+    [100.115988, 20.41785],
+    [99.543309, 20.186598],
+  ],
+  [
+    [79.5, 9.8],
+    [81.8, 9.8],
+    [81.4, 6.2],
+    [80.5, 5.8],
+  ],
+  [
+    [73.2, 13.5],
+    [73.5, 13.5],
+    [73.4, 12.8],
+    [73.1, 12.9],
+  ],
+  [
+    [72.2, 10.5],
+    [72.4, 10.5],
+    [72.3, 9.8],
+    [72.1, 9.9],
+  ],
+] as const;
+
 type ReconstructionError = "unsupported-location" | "request-failed";
 type ValidationState =
   | "CHECKING"
@@ -42,6 +198,7 @@ type ValidationState =
   | "COVERAGE_UNAVAILABLE"
   | "INCOMPLETE_INPUTS"
   | "OUTSIDE_DOMAIN"
+  | "LOCATION_ON_LAND"
   | "INCOMPLETE_DATA"
   | "INCOMPLETE_OBSERVATIONS"
   | "LOCATION_NOT_SUPPORTED"
@@ -76,9 +233,9 @@ const SURFACE_VARIABLE_LABELS: Record<string, string> = {
 };
 
 const UNSUPPORTED_LOCATION_MESSAGE =
-  "This location is within the North Indian Ocean domain, but it cannot currently be represented by the model's prediction tile.";
+  "This coordinate is inside the geographic domain but outside the model's currently representable prediction region.";
 const UNSUPPORTED_LOCATION_HELPER =
-  "Please select a nearby location inside the supported reconstruction area.";
+  "Please select another ocean location within the supported reconstruction area.";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -98,6 +255,43 @@ function parseCoordinate(value: string): number | null {
 function normalizeCoordinateInput(value: string): string {
   const parsed = parseCoordinate(value);
   return parsed === null ? value : String(parsed);
+}
+
+function snapToGrid(value: number, minimum: number): number {
+  return minimum + Math.round((value - minimum) / GRID_RESOLUTION_DEG) * GRID_RESOLUTION_DEG;
+}
+
+function pointInPolygon(
+  latitude: number,
+  longitude: number,
+  polygon: ReadonlyArray<readonly [number, number]>,
+) {
+  let inside = false;
+
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+    const [currentLongitude, currentLatitude] = polygon[index];
+    const [previousLongitude, previousLatitude] = polygon[previous];
+
+    const intersects =
+      (currentLatitude > latitude) !== (previousLatitude > latitude) &&
+      longitude <
+        ((previousLongitude - currentLongitude) *
+          (latitude - currentLatitude)) /
+          (previousLatitude - currentLatitude) +
+          currentLongitude;
+
+    if (intersects) {
+      inside = !inside;
+    }
+  }
+
+  return inside;
+}
+
+function isCoordinateOnLand(latitude: number, longitude: number) {
+  return LANDMASSES_FOR_VALIDATION.some((polygon) =>
+    pointInPolygon(latitude, longitude, polygon),
+  );
 }
 
 function requestKey(latitude: number, longitude: number, date: string) {
@@ -178,15 +372,53 @@ function App() {
   const preflightCoverage = selectedRequestKey
     ? preflightCoverageByRequest[selectedRequestKey]
     : undefined;
-  const coordinateRangeMessage = selectedPoint.lat !== null
-    && (selectedPoint.lat < DOMAIN.latitudeMin
-      || selectedPoint.lat > DOMAIN.latitudeMax)
-    ? "Latitude must be between 5°N and 30°N."
-    : selectedPoint.lon !== null
-      && (selectedPoint.lon < DOMAIN.longitudeMin
-        || selectedPoint.lon > DOMAIN.longitudeMax)
-      ? "Longitude must be between 45°E and 105°E."
-      : "Select a coordinate inside 5°N–30°N and 45°E–105°E.";
+  const latitudeOutOfRange =
+    selectedPoint.lat !== null &&
+    (selectedPoint.lat < DOMAIN.latitudeMin ||
+      selectedPoint.lat > DOMAIN.latitudeMax);
+
+  const longitudeOutOfRange =
+    selectedPoint.lon !== null &&
+    (selectedPoint.lon < DOMAIN.longitudeMin ||
+      selectedPoint.lon > DOMAIN.longitudeMax);
+
+  const coordinateIsOnLand =
+    selectedPoint.lat !== null &&
+    selectedPoint.lon !== null &&
+    !latitudeOutOfRange &&
+    !longitudeOutOfRange &&
+    isCoordinateOnLand(selectedPoint.lat, selectedPoint.lon);
+
+  const snappedLatitude =
+    selectedPoint.lat !== null
+      ? snapToGrid(selectedPoint.lat, DOMAIN.latitudeMin)
+      : null;
+  const snappedLongitude =
+    selectedPoint.lon !== null
+      ? snapToGrid(selectedPoint.lon, DOMAIN.longitudeMin)
+      : null;
+
+  const modelLocationOutOfRange =
+    selectedPoint.lat !== null &&
+    selectedPoint.lon !== null &&
+    !latitudeOutOfRange &&
+    !longitudeOutOfRange &&
+    !coordinateIsOnLand &&
+    snappedLatitude !== null &&
+    snappedLongitude !== null &&
+    (snappedLatitude < MODEL_DOMAIN.latitudeMin ||
+      snappedLatitude > MODEL_DOMAIN.latitudeMax ||
+      snappedLongitude < MODEL_DOMAIN.longitudeMin ||
+      snappedLongitude > MODEL_DOMAIN.longitudeMax);
+
+  const coordinateRangeMessage =
+    latitudeOutOfRange && longitudeOutOfRange
+      ? "Latitude and longitude are out of range. Latitude must be between 5°N and 30°N, and longitude must be between 45°E and 105°E."
+      : latitudeOutOfRange
+        ? "Latitude is out of range. Latitude must be between 5°N and 30°N."
+        : longitudeOutOfRange
+          ? "Longitude is out of range. Longitude must be between 45°E and 105°E."
+          : "Select a coordinate inside 5°N–30°N and 45°E–105°E.";
 
   const shouldCheckCoverage = selectedPoint.lat !== null
     && selectedPoint.lon !== null
@@ -194,6 +426,8 @@ function App() {
     && selectedPoint.lat <= DOMAIN.latitudeMax
     && selectedPoint.lon >= DOMAIN.longitudeMin
     && selectedPoint.lon <= DOMAIN.longitudeMax
+    && !coordinateIsOnLand
+    && !modelLocationOutOfRange
     && Boolean(date)
     && !statusLoading;
 
@@ -207,6 +441,10 @@ function App() {
     || selectedPoint.lon > DOMAIN.longitudeMax
   ) {
     validationState = "OUTSIDE_DOMAIN";
+  } else if (coordinateIsOnLand) {
+    validationState = "LOCATION_ON_LAND";
+  } else if (modelLocationOutOfRange) {
+    validationState = "LOCATION_NOT_SUPPORTED";
   } else if (!date) {
     validationState = "INCOMPLETE_INPUTS";
   } else if (statusLoading) {
@@ -676,6 +914,7 @@ function App() {
                 ? demoStage === "complete" ? "success" : ""
                 : validationState === "REQUEST_FAILED"
                     || validationState === "LOCATION_NOT_SUPPORTED"
+                    || validationState === "LOCATION_ON_LAND"
                   ? "error-banner"
                   : "warning-banner"
             }`}
@@ -698,7 +937,9 @@ function App() {
                         ? "INCOMPLETE INPUTS"
                         : validationState === "OUTSIDE_DOMAIN"
                           ? "OUTSIDE SUPPORTED DOMAIN"
-                          : validationState === "INCOMPLETE_DATA"
+                          : validationState === "LOCATION_ON_LAND"
+                          ? "LOCATION ON LAND"
+                        : validationState === "INCOMPLETE_DATA"
                               ? "INCOMPLETE DATA"
                             : validationState === "INCOMPLETE_OBSERVATIONS"
                               ? "RECONSTRUCTION UNAVAILABLE"
@@ -723,6 +964,8 @@ function App() {
                       ? "Enter a numeric latitude, longitude, and target date."
                       : validationState === "OUTSIDE_DOMAIN"
                         ? coordinateRangeMessage
+                        : validationState === "LOCATION_ON_LAND"
+                          ? "The selected coordinate is on land. Please select a location over the ocean within the supported reconstruction domain."
                         : validationState === "INCOMPLETE_DATA"
                             ? `Input window: ${preflightCoverage?.windowStart ?? shiftIsoDate(date, -6)} → ${preflightCoverage?.windowEnd ?? date}. ${preflightCoverage?.missingDates.length ? `Missing date(s): ${preflightCoverage.missingDates.join(", ")}. ` : ""}${preflightCoverage?.variablesReady ?? 0}/${preflightCoverage?.requiredVariables ?? 7} variables available${preflightCoverage?.missingVariables.length ? `. Missing variable(s): ${preflightCoverage.missingVariables.map((variable) => SURFACE_VARIABLE_LABELS[variable] ?? variable).join(", ")}` : ""}.`
                             : validationState === "INCOMPLETE_OBSERVATIONS"
