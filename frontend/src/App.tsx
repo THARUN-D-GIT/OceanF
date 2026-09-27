@@ -885,7 +885,7 @@ function App() {
               { id: "window", label: "RETROSPECTIVE 7-DAY INPUT WINDOW" },
               { id: "model", label: "OCEANEMBED-CNN" },
               { id: "output", label: "15-DEPTH RECONSTRUCTION" },
-              { id: "validation", label: "GLORYS TEST COMPLETE · ARGO PLANNED" },
+              { id: "validation", label: "GLORYS TEST COMPLETE · ARGO VALIDATED" },
             ].map((step, index) => {
               const active =
                 (demoStage === "surface" && index === 0) ||
@@ -1215,10 +1215,16 @@ function App() {
             </div>
 
             <div className="validation-block argostage">
-              <div className="validation-header">ARGO</div>
-              <p>Planned</p>
-              <div className="validation-text">Independent ARGO observational validation is planned.</div>
-            </div>
+  <div className="validation-header">ARGO</div>
+  <p>Validated</p>
+  <div className="validation-text">
+    Independent ARGO observational validation is complete.
+  </div>
+  <div className="validation-text">76 profiles · 997 valid matchups</div>
+  <div className="validation-text">RMSE 1.533 °C · MAE 1.166 °C</div>
+  <div className="validation-text">Bias −0.182 °C · Pearson 0.979</div>
+  <div className="validation-text">Validation period: December 2025</div>
+</div>
           </div>
         </section>
         </main>
